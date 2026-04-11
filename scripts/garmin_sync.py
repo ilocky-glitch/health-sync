@@ -99,11 +99,29 @@ def sec_to_min(s) -> float | None:
 
 # ── Garmin connection ─────────────────────────────────────────────────────────
 def connect_garmin() -> Garmin:
-    print("Connecting to Garmin Connect…")
-    client = Garmin(GARMIN_EMAIL, GARMIN_PASSWORD)
-    client.login()
-    print("  ✓ Connected")
-    return client
+    """Connect with retry logic to handle Garmin rate limiting (429 errors)."""
+    max_retries = 5
+    retry_delays = [30, 60, 120, 180, 300]  # seconds between retries
+
+    for attempt in range(max_retries):
+        try:
+            print(f"Connecting to Garmin Connect… (attempt {attempt + 1}/{max_retries})")
+            client = Garmin(GARMIN_EMAIL, GARMIN_PASSWORD)
+            client.login()
+            print("  ✓ Connected")
+            return client
+        except Exception as e:
+            error_str = str(e)
+            if "429" in error_str or "TooManyRequests" in error_str or "Rate Limit" in error_str:
+                if attempt < max_retries - 1:
+                    wait = retry_delays[attempt]
+                    print(f"  ⚠ Rate limited by Garmin. Waiting {wait}s before retry…")
+                    time.sleep(wait)
+                else:
+                    print("  ✗ Max retries reached. Garmin rate limit persisting.")
+                    raise
+            else:
+                raise
 
 # ── Daily metrics sync ────────────────────────────────────────────────────────
 def sync_daily(client: Garmin, date_str: str):
