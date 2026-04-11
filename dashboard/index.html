@@ -1,1 +1,1476 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Performance">
+<meta name="theme-color" content="#080c14">
+<title>Performance Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 
+<style>
+/* ═══════════════════════════════════════════════════════════
+   DESIGN SYSTEM
+═══════════════════════════════════════════════════════════ */
+:root {
+  --bg:         #080c14;
+  --bg2:        #0d1420;
+  --bg3:        #131b2e;
+  --border:     rgba(255,255,255,0.07);
+  --border2:    rgba(255,255,255,0.12);
+  --text:       #e8edf5;
+  --muted:      #5a6a82;
+  --accent:     #4f9eff;
+  --accent2:    #7b5ea7;
+  --green:      #3ecf8e;
+  --yellow:     #f5c842;
+  --red:        #f25757;
+  --orange:     #f28a2e;
+  --font-head:  'Syne', sans-serif;
+  --font-mono:  'IBM Plex Mono', monospace;
+  --safe-top:   env(safe-area-inset-top, 0px);
+  --safe-bot:   env(safe-area-inset-bottom, 0px);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 14px; -webkit-text-size-adjust: 100%; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  min-height: 100dvh;
+  padding-top: var(--safe-top);
+  padding-bottom: calc(var(--safe-bot) + 72px);
+  overflow-x: hidden;
+}
+
+/* ── Scrollbars ── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+/* ═══════════════════════════════════════════════════════════
+   LOADING
+═══════════════════════════════════════════════════════════ */
+#loading {
+  position: fixed; inset: 0; background: var(--bg);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; z-index: 100;
+  gap: 20px;
+}
+.loader-ring {
+  width: 48px; height: 48px; border-radius: 50%;
+  border: 2px solid var(--border2);
+  border-top-color: var(--accent);
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+#loading p { color: var(--muted); font-size: 0.78rem; letter-spacing: 0.08em; }
+
+/* ═══════════════════════════════════════════════════════════
+   TOP HEADER
+═══════════════════════════════════════════════════════════ */
+.top-bar {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(8,12,20,0.92);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--border);
+  padding: 14px 20px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.top-bar h1 {
+  font-family: var(--font-head);
+  font-size: 1.1rem; font-weight: 800;
+  letter-spacing: -0.02em;
+  background: linear-gradient(135deg, var(--text) 40%, var(--accent));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.sync-badge {
+  font-size: 0.65rem; color: var(--muted);
+  display: flex; align-items: center; gap: 6px;
+}
+.sync-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+  animation: pulse 2.5s ease-in-out infinite;
+}
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* ═══════════════════════════════════════════════════════════
+   NAV TABS
+═══════════════════════════════════════════════════════════ */
+.nav-bar {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
+  background: rgba(8,12,20,0.95);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-top: 1px solid var(--border);
+  display: flex; 
+  padding-bottom: var(--safe-bot);
+}
+.nav-btn {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 4px; padding: 10px 4px;
+  background: none; border: none; cursor: pointer;
+  color: var(--muted); font-family: var(--font-mono);
+  font-size: 0.58rem; letter-spacing: 0.06em;
+  transition: color 0.2s;
+}
+.nav-btn svg { width: 20px; height: 20px; stroke-width: 1.5; }
+.nav-btn.active { color: var(--accent); }
+.nav-btn.active svg { filter: drop-shadow(0 0 4px var(--accent)); }
+
+/* ═══════════════════════════════════════════════════════════
+   SCREENS
+═══════════════════════════════════════════════════════════ */
+.screen { display: none; padding: 16px 16px 8px; animation: fadeIn 0.25s ease; }
+.screen.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ═══════════════════════════════════════════════════════════
+   SECTION HEADERS
+═══════════════════════════════════════════════════════════ */
+.section-label {
+  font-family: var(--font-head); font-size: 0.65rem;
+  font-weight: 700; letter-spacing: 0.15em;
+  color: var(--muted); text-transform: uppercase;
+  margin: 20px 0 10px;
+}
+.section-label:first-child { margin-top: 4px; }
+
+/* ═══════════════════════════════════════════════════════════
+   CARDS
+═══════════════════════════════════════════════════════════ */
+.card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px;
+  margin-bottom: 10px;
+  position: relative; overflow: hidden;
+}
+.card::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border2), transparent);
+}
+.card-title {
+  font-family: var(--font-head); font-size: 0.7rem;
+  font-weight: 600; letter-spacing: 0.1em;
+  color: var(--muted); text-transform: uppercase; margin-bottom: 12px;
+}
+
+/* ── Metric Grid ── */
+.metric-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.metric-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+
+.metric-tile {
+  background: var(--bg3); border-radius: 10px;
+  padding: 12px 10px; text-align: center;
+  border: 1px solid var(--border);
+}
+.metric-tile .val {
+  font-family: var(--font-head); font-size: 1.5rem;
+  font-weight: 800; line-height: 1;
+  color: var(--text);
+}
+.metric-tile .val.good  { color: var(--green); }
+.metric-tile .val.warn  { color: var(--yellow); }
+.metric-tile .val.bad   { color: var(--red); }
+.metric-tile .val.accent { color: var(--accent); }
+.metric-tile .unit { font-size: 0.58rem; color: var(--muted); margin-top: 4px; }
+.metric-tile .lbl  { font-size: 0.62rem; color: var(--muted); margin-top: 3px; font-family: var(--font-mono); }
+
+/* ── Insight Card ── */
+.insight-card {
+  background: var(--bg2); border-radius: 14px;
+  border: 1px solid var(--border);
+  margin-bottom: 10px; overflow: hidden;
+}
+.insight-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 16px 10px;
+}
+.insight-icon {
+  width: 32px; height: 32px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 1rem; flex-shrink: 0;
+}
+.insight-icon.green  { background: rgba(62,207,142,0.12); }
+.insight-icon.yellow { background: rgba(245,200,66,0.12); }
+.insight-icon.red    { background: rgba(242,87,87,0.12); }
+.insight-icon.blue   { background: rgba(79,158,255,0.12); }
+.insight-icon.purple { background: rgba(123,94,167,0.12); }
+.insight-title { font-family: var(--font-head); font-size: 0.78rem; font-weight: 700; }
+.insight-body { padding: 0 16px 14px; font-size: 0.72rem; line-height: 1.6; color: rgba(232,237,245,0.75); }
+.insight-body strong { color: var(--text); font-weight: 500; }
+
+/* ── Bar Charts ── */
+.bar-row {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 8px; font-size: 0.65rem;
+}
+.bar-label { width: 56px; text-align: right; color: var(--muted); flex-shrink: 0; }
+.bar-track {
+  flex: 1; height: 6px; background: var(--bg3);
+  border-radius: 3px; overflow: hidden;
+}
+.bar-fill {
+  height: 100%; border-radius: 3px;
+  transition: width 1s cubic-bezier(0.4,0,0.2,1);
+  background: var(--accent);
+}
+.bar-fill.green  { background: var(--green); }
+.bar-fill.yellow { background: var(--yellow); }
+.bar-fill.red    { background: var(--red); }
+.bar-fill.orange { background: var(--orange); }
+.bar-fill.purple { background: var(--accent2); }
+.bar-val { width: 34px; color: var(--muted); font-size: 0.62rem; }
+
+/* ── HR Zone donut ── */
+.zone-container { display: flex; align-items: center; gap: 16px; }
+.zone-donut { position: relative; width: 80px; height: 80px; flex-shrink: 0; }
+.zone-donut svg { transform: rotate(-90deg); }
+.zone-center {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+}
+.zone-center .z-val { font-family: var(--font-head); font-size: 1rem; font-weight: 800; }
+.zone-center .z-lbl { font-size: 0.52rem; color: var(--muted); }
+.zone-legend { flex: 1; }
+.zone-legend-item {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 0.62rem; color: var(--muted); margin-bottom: 5px;
+}
+.zone-dot { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+
+/* ── TIR Ring ── */
+.tir-container { display: flex; align-items: center; gap: 16px; }
+.tir-ring { position: relative; width: 90px; height: 90px; flex-shrink: 0; }
+.tir-ring svg { transform: rotate(-90deg); }
+.tir-center {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+}
+.tir-center .tir-pct { font-family: var(--font-head); font-size: 1.3rem; font-weight: 800; }
+.tir-center .tir-lbl { font-size: 0.5rem; color: var(--muted); }
+.tir-stats { flex: 1; }
+.tir-stat-row {
+  display: flex; justify-content: space-between;
+  font-size: 0.65rem; margin-bottom: 6px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--border);
+}
+.tir-stat-row:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+
+/* ── Glucose Sparkline ── */
+.sparkline-wrap { height: 60px; position: relative; margin: 8px 0; }
+.sparkline-wrap canvas { width: 100% !important; }
+
+/* ── Split Table ── */
+.split-table { width: 100%; border-collapse: collapse; font-size: 0.65rem; }
+.split-table th {
+  color: var(--muted); text-align: left; padding: 4px 6px;
+  font-weight: 400; letter-spacing: 0.06em; border-bottom: 1px solid var(--border);
+}
+.split-table td { padding: 6px 6px; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.split-table tr:last-child td { border-bottom: none; }
+.split-good { color: var(--green); }
+.split-warn { color: var(--yellow); }
+.split-bad  { color: var(--red); }
+
+/* ── Correlation Banner ── */
+.corr-banner {
+  border-radius: 12px; padding: 14px 16px;
+  margin-bottom: 10px;
+  border: 1px solid;
+  display: flex; align-items: flex-start; gap: 12px;
+}
+.corr-banner.positive {
+  background: rgba(62,207,142,0.06);
+  border-color: rgba(62,207,142,0.2);
+}
+.corr-banner.warning {
+  background: rgba(245,200,66,0.06);
+  border-color: rgba(245,200,66,0.2);
+}
+.corr-banner.negative {
+  background: rgba(242,87,87,0.06);
+  border-color: rgba(242,87,87,0.2);
+}
+.corr-banner .icon { font-size: 1.2rem; }
+.corr-banner .text { font-size: 0.7rem; line-height: 1.55; color: rgba(232,237,245,0.8); }
+.corr-banner .text strong { font-weight: 600; color: var(--text); font-size: 0.73rem; }
+
+/* ── Objective Selector ── */
+.obj-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+.obj-btn {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px 6px;
+  text-align: center; cursor: pointer;
+  transition: all 0.2s; font-family: var(--font-mono); color: var(--muted);
+}
+.obj-btn .obj-icon { font-size: 1.3rem; margin-bottom: 4px; }
+.obj-btn .obj-label { font-size: 0.6rem; letter-spacing: 0.05em; }
+.obj-btn.active {
+  border-color: var(--accent);
+  background: rgba(79,158,255,0.1);
+  color: var(--text);
+  box-shadow: 0 0 12px rgba(79,158,255,0.15);
+}
+
+/* ── Action Cards ── */
+.action-card {
+  border-radius: 12px; padding: 16px;
+  margin-bottom: 10px; border: 1px solid;
+}
+.action-card.training {
+  background: rgba(79,158,255,0.06);
+  border-color: rgba(79,158,255,0.2);
+}
+.action-card.glucose {
+  background: rgba(62,207,142,0.06);
+  border-color: rgba(62,207,142,0.2);
+}
+.action-label {
+  font-family: var(--font-head); font-size: 0.6rem;
+  letter-spacing: 0.15em; text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.action-label.training { color: var(--accent); }
+.action-label.glucose  { color: var(--green); }
+.action-title { font-family: var(--font-head); font-size: 0.9rem; font-weight: 700; margin-bottom: 6px; }
+.action-body { font-size: 0.7rem; line-height: 1.6; color: rgba(232,237,245,0.75); }
+
+/* ── Week objective chart ── */
+.week-bar-chart { display: flex; align-items: flex-end; gap: 6px; height: 60px; margin: 8px 0; }
+.week-bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.week-bar {
+  width: 100%; border-radius: 4px 4px 0 0;
+  min-height: 4px; transition: height 0.8s cubic-bezier(0.4,0,0.2,1);
+}
+.week-bar.zone2    { background: var(--green); }
+.week-bar.tempo    { background: var(--yellow); }
+.week-bar.vo2      { background: var(--red); }
+.week-bar.rest     { background: var(--border2); }
+.week-bar-day { font-size: 0.55rem; color: var(--muted); }
+
+/* ── Empty state ── */
+.empty {
+  text-align: center; padding: 40px 20px;
+  color: var(--muted); font-size: 0.75rem; line-height: 1.7;
+}
+.empty .empty-icon { font-size: 2rem; margin-bottom: 12px; }
+
+/* ── Config screen ── */
+.config-field { margin-bottom: 14px; }
+.config-label { font-size: 0.65rem; color: var(--muted); margin-bottom: 6px; letter-spacing: 0.06em; }
+.config-input {
+  width: 100%; background: var(--bg3);
+  border: 1px solid var(--border2); border-radius: 8px;
+  color: var(--text); font-family: var(--font-mono); font-size: 0.75rem;
+  padding: 10px 12px; outline: none;
+  transition: border-color 0.2s;
+}
+.config-input:focus { border-color: var(--accent); }
+.config-btn {
+  width: 100%; background: var(--accent);
+  border: none; border-radius: 10px;
+  color: #fff; font-family: var(--font-head); font-weight: 700;
+  font-size: 0.85rem; padding: 14px;
+  cursor: pointer; transition: opacity 0.2s;
+  margin-top: 8px;
+}
+.config-btn:active { opacity: 0.8; }
+
+/* ── Refresh button ── */
+.refresh-btn {
+  display: flex; align-items: center; justify-content: center;
+  gap: 8px; width: 100%;
+  background: var(--bg3); border: 1px solid var(--border2);
+  border-radius: 10px; color: var(--muted);
+  font-family: var(--font-mono); font-size: 0.7rem;
+  padding: 12px; cursor: pointer; margin-top: 6px;
+  transition: all 0.2s;
+}
+.refresh-btn:active { background: var(--bg2); color: var(--text); }
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="loader-ring"></div>
+  <p>Loading performance data…</p>
+</div>
+
+<!-- ── TOP BAR ── -->
+<div class="top-bar">
+  <h1>PERFORMANCE HUB</h1>
+  <div class="sync-badge">
+    <span class="sync-dot"></span>
+    <span id="sync-date">–</span>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     SCREEN 1: TODAY
+══════════════════════════════════════════ -->
+<div class="screen active" id="screen-today">
+  <div class="section-label">Daily Readiness</div>
+
+  <div class="metric-grid" id="readiness-grid">
+    <div class="metric-tile">
+      <div class="val accent" id="tile-readiness">–</div>
+      <div class="unit">/100</div>
+      <div class="lbl">READINESS</div>
+    </div>
+    <div class="metric-tile">
+      <div class="val" id="tile-hrv-status">–</div>
+      <div class="unit">STATUS</div>
+      <div class="lbl">HRV</div>
+    </div>
+    <div class="metric-tile">
+      <div class="val" id="tile-sleep">–</div>
+      <div class="unit">/100</div>
+      <div class="lbl">SLEEP SCORE</div>
+    </div>
+    <div class="metric-tile">
+      <div class="val accent" id="tile-bb">–</div>
+      <div class="unit">PEAK</div>
+      <div class="lbl">BODY BATTERY</div>
+    </div>
+  </div>
+
+  <div class="section-label">Recovery Metrics</div>
+  <div class="card">
+    <div class="card-title">HRV & Heart Rate</div>
+    <div class="metric-grid-3">
+      <div class="metric-tile">
+        <div class="val" id="tile-hrv-last">–</div>
+        <div class="unit">ms</div>
+        <div class="lbl">LAST NIGHT</div>
+      </div>
+      <div class="metric-tile">
+        <div class="val" id="tile-hrv-5d">–</div>
+        <div class="unit">ms</div>
+        <div class="lbl">5-DAY AVG</div>
+      </div>
+      <div class="metric-tile">
+        <div class="val" id="tile-rhr">–</div>
+        <div class="unit">bpm</div>
+        <div class="lbl">REST HR</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Sleep Breakdown</div>
+    <div id="sleep-bars"></div>
+  </div>
+
+  <div class="section-label">Glucose (Yesterday)</div>
+  <div class="card">
+    <div class="card-title">Time in Range</div>
+    <div class="tir-container">
+      <div class="tir-ring">
+        <svg width="90" height="90" viewBox="0 0 90 90">
+          <circle cx="45" cy="45" r="36" fill="none" stroke="var(--bg3)" stroke-width="8"/>
+          <circle cx="45" cy="45" r="36" fill="none" stroke="var(--green)" stroke-width="8"
+            stroke-dasharray="226.2" id="tir-arc" stroke-dashoffset="226.2"
+            stroke-linecap="round"/>
+        </svg>
+        <div class="tir-center">
+          <span class="tir-pct" id="tir-pct">–</span>
+          <span class="tir-lbl">IN RANGE</span>
+        </div>
+      </div>
+      <div class="tir-stats">
+        <div class="tir-stat-row">
+          <span style="color:var(--red)">▲ HIGH</span>
+          <span id="tir-tar">–%</span>
+        </div>
+        <div class="tir-stat-row">
+          <span style="color:var(--green)">◉ IN RANGE</span>
+          <span id="tir-tir">–%</span>
+        </div>
+        <div class="tir-stat-row">
+          <span style="color:var(--accent)">▼ LOW</span>
+          <span id="tir-tbr">–%</span>
+        </div>
+        <div class="tir-stat-row">
+          <span style="color:var(--muted)">∿ VARIABILITY</span>
+          <span id="tir-var">–</span>
+        </div>
+      </div>
+    </div>
+    <div style="margin-top:12px">
+      <div class="bar-row">
+        <span class="bar-label">Mean</span>
+        <span style="font-size:0.7rem;color:var(--text)" id="cgm-mean">– mmol/L</span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-label">Overnight</span>
+        <span style="font-size:0.7rem;color:var(--text)" id="cgm-overnight">– mmol/L</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cross-correlation insights -->
+  <div id="correlation-insights"></div>
+
+  <button class="refresh-btn" onclick="loadData()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="14" height="14">
+      <path d="M23 4v6h-6M1 20v-6h6" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+    </svg>
+    Refresh Data
+  </button>
+</div>
+
+<!-- ══════════════════════════════════════════
+     SCREEN 2: TRAINING
+══════════════════════════════════════════ -->
+<div class="screen" id="screen-training">
+  <div class="section-label">Last Activity</div>
+  <div class="card" id="last-activity-card">
+    <div class="card-title" id="la-name">Loading…</div>
+    <div class="metric-grid">
+      <div class="metric-tile">
+        <div class="val accent" id="la-dist">–</div>
+        <div class="unit">km</div>
+        <div class="lbl">DISTANCE</div>
+      </div>
+      <div class="metric-tile">
+        <div class="val" id="la-pace">–</div>
+        <div class="unit">min/km</div>
+        <div class="lbl">RUN PACE</div>
+      </div>
+      <div class="metric-tile">
+        <div class="val" id="la-hr">–</div>
+        <div class="unit">bpm</div>
+        <div class="lbl">AVG HR</div>
+      </div>
+      <div class="metric-tile">
+        <div class="val" id="la-cadence">–</div>
+        <div class="unit">spm</div>
+        <div class="lbl">CADENCE</div>
+      </div>
+    </div>
+    <div style="margin-top:12px" id="biomech-row">
+      <div class="card-title">Running Dynamics</div>
+      <div class="metric-grid-3">
+        <div class="metric-tile">
+          <div class="val" id="la-gct">–</div>
+          <div class="unit">ms</div>
+          <div class="lbl">GCT</div>
+        </div>
+        <div class="metric-tile">
+          <div class="val" id="la-osc">–</div>
+          <div class="unit">cm</div>
+          <div class="lbl">VERT OSC</div>
+        </div>
+        <div class="metric-tile">
+          <div class="val" id="la-stride">–</div>
+          <div class="unit">m</div>
+          <div class="lbl">STRIDE</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Heart Rate Zones</div>
+  <div class="card">
+    <div class="zone-container">
+      <div class="zone-donut">
+        <svg width="80" height="80" viewBox="0 0 80 80" id="zone-svg"></svg>
+        <div class="zone-center">
+          <span class="z-val" id="zone-dominant-pct">–</span>
+          <span class="z-lbl" id="zone-dominant-lbl">Z2</span>
+        </div>
+      </div>
+      <div class="zone-legend" id="zone-legend"></div>
+    </div>
+    <div style="margin-top:14px" id="zone-bars"></div>
+  </div>
+
+  <div class="section-label">Km Splits</div>
+  <div class="card">
+    <div class="card-title">Walk Laps Excluded • Run Only</div>
+    <div style="overflow-x:auto">
+      <table class="split-table" id="splits-table">
+        <thead>
+          <tr>
+            <th>KM</th><th>PACE</th><th>HR</th><th>CAD</th><th>GCT</th>
+          </tr>
+        </thead>
+        <tbody id="splits-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     SCREEN 3: INSIGHTS
+══════════════════════════════════════════ -->
+<div class="screen" id="screen-insights">
+  <div class="section-label">Training Objective</div>
+
+  <div class="obj-grid">
+    <div class="obj-btn active" data-obj="zone2" onclick="setObjective('zone2')">
+      <div class="obj-icon">🫁</div>
+      <div class="obj-label">ZONE 2</div>
+    </div>
+    <div class="obj-btn" data-obj="threshold" onclick="setObjective('threshold')">
+      <div class="obj-icon">⚡</div>
+      <div class="obj-label">THRESHOLD</div>
+    </div>
+    <div class="obj-btn" data-obj="vo2" onclick="setObjective('vo2')">
+      <div class="obj-icon">🔥</div>
+      <div class="obj-label">VO2 MAX</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">This Week vs Objective</div>
+    <div class="week-bar-chart" id="week-chart"></div>
+    <div id="week-summary" style="font-size:0.68rem;color:var(--muted);line-height:1.6;margin-top:8px"></div>
+  </div>
+
+  <div class="section-label">Key Insights</div>
+  <div id="insights-list"></div>
+
+  <div class="section-label">Next Week — 2 Priority Actions</div>
+  <div id="actions-list"></div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     SCREEN 4: SETTINGS
+══════════════════════════════════════════ -->
+<div class="screen" id="screen-settings">
+  <div class="section-label">Notion Connection</div>
+  <div class="card">
+    <div class="config-field">
+      <div class="config-label">NOTION INTEGRATION TOKEN</div>
+      <input class="config-input" type="password" id="cfg-token" placeholder="secret_…">
+    </div>
+    <div class="config-field">
+      <div class="config-label">GARMIN DB ID</div>
+      <input class="config-input" type="text" id="cfg-garmin" placeholder="32-char database ID">
+    </div>
+    <div class="config-field">
+      <div class="config-label">CGM DB ID</div>
+      <input class="config-input" type="text" id="cfg-cgm" placeholder="32-char database ID">
+    </div>
+    <div class="config-field">
+      <div class="config-label">RUNNING DB ID</div>
+      <input class="config-input" type="text" id="cfg-running" placeholder="32-char database ID">
+    </div>
+    <button class="config-btn" onclick="saveConfig()">Save & Connect</button>
+  </div>
+
+  <div class="section-label">Database IDs</div>
+  <div class="card">
+    <div style="font-size:0.68rem;line-height:1.8;color:var(--muted)">
+      To find a database ID: open it in Notion → copy the URL → the 32-char string after the last <strong style="color:var(--text)">/</strong> and before <strong style="color:var(--text)">?v=</strong> is the ID.<br><br>
+      Example:<br>
+      <span style="color:var(--accent);font-size:0.62rem;word-break:break-all">notion.so/workspace/<strong>c49757a9f4474e6cbd86629b4660513f</strong></span>
+    </div>
+  </div>
+
+  <div class="section-label">GitHub Actions</div>
+  <div class="card">
+    <div style="font-size:0.68rem;line-height:1.8;color:var(--muted)">
+      Required secrets in your GitHub repo:<br>
+      <span style="color:var(--accent)">GARMIN_EMAIL</span><br>
+      <span style="color:var(--accent)">GARMIN_PASSWORD</span><br>
+      <span style="color:var(--accent)">DEXCOM_USERNAME</span><br>
+      <span style="color:var(--accent)">DEXCOM_PASSWORD</span><br>
+      <span style="color:var(--accent)">NOTION_TOKEN</span><br>
+      <span style="color:var(--accent)">NOTION_DB_GARMIN</span><br>
+      <span style="color:var(--accent)">NOTION_DB_CGM</span><br>
+      <span style="color:var(--accent)">NOTION_DB_RUNNING</span><br><br>
+      Sync runs at <strong style="color:var(--text)">6:00 AM SGT</strong> daily.
+    </div>
+  </div>
+</div>
+
+<!-- ── BOTTOM NAV ── -->
+<nav class="nav-bar">
+  <button class="nav-btn active" onclick="switchScreen('today', this)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2" stroke-linecap="round"/></svg>
+    TODAY
+  </button>
+  <button class="nav-btn" onclick="switchScreen('training', this)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+    TRAINING
+  </button>
+  <button class="nav-btn" onclick="switchScreen('insights', this)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M2 20h.01M7 20v-4M12 20v-8M17 20V8M22 4l-5 5-4-4-6 6"/></svg>
+    INSIGHTS
+  </button>
+  <button class="nav-btn" onclick="switchScreen('settings', this)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93A10 10 0 115.64 18.36"/></svg>
+    SETTINGS
+  </button>
+</nav>
+
+<script>
+/* ═══════════════════════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════════════════════ */
+let CONFIG = {};
+let DATA = { garmin: [], cgm: [], running: [] };
+let currentObjective = 'zone2';
+
+const NOTION_PROXY = 'https://api.notion.com/v1';
+
+/* ═══════════════════════════════════════════════════════════
+   CONFIG
+═══════════════════════════════════════════════════════════ */
+function loadConfig() {
+  try {
+    CONFIG = JSON.parse(localStorage.getItem('ph_config') || '{}');
+    if (CONFIG.token)   document.getElementById('cfg-token').value   = CONFIG.token;
+    if (CONFIG.garmin)  document.getElementById('cfg-garmin').value  = CONFIG.garmin;
+    if (CONFIG.cgm)     document.getElementById('cfg-cgm').value     = CONFIG.cgm;
+    if (CONFIG.running) document.getElementById('cfg-running').value = CONFIG.running;
+  } catch(e) {}
+}
+
+function saveConfig() {
+  CONFIG = {
+    token:   document.getElementById('cfg-token').value.trim(),
+    garmin:  document.getElementById('cfg-garmin').value.trim().replace(/-/g,''),
+    cgm:     document.getElementById('cfg-cgm').value.trim().replace(/-/g,''),
+    running: document.getElementById('cfg-running').value.trim().replace(/-/g,''),
+  };
+  localStorage.setItem('ph_config', JSON.stringify(CONFIG));
+  loadData();
+  switchScreen('today', document.querySelectorAll('.nav-btn')[0]);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   NOTION FETCH
+═══════════════════════════════════════════════════════════ */
+async function notionQuery(dbId, sorts = [], filter = null) {
+  if (!CONFIG.token || !dbId) return [];
+  const body = { page_size: 30 };
+  if (sorts.length) body.sorts = sorts;
+  if (filter) body.filter = filter;
+
+  try {
+    const r = await fetch(`${NOTION_PROXY}/databases/${dbId}/query`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${CONFIG.token}`,
+        'Content-Type': 'application/json',
+        'Notion-Version': '2022-06-28',
+      },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) return [];
+    const d = await r.json();
+    return d.results || [];
+  } catch(e) {
+    console.error('Notion error:', e);
+    return [];
+  }
+}
+
+function prop(page, name, type) {
+  const p = page?.properties?.[name];
+  if (!p) return null;
+  if (type === 'number') return p.number;
+  if (type === 'title')  return p.title?.[0]?.text?.content || '';
+  if (type === 'select') return p.select?.name || null;
+  if (type === 'text')   return p.rich_text?.[0]?.text?.content || '';
+  return null;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   LOAD DATA
+═══════════════════════════════════════════════════════════ */
+async function loadData() {
+  document.getElementById('loading').style.display = 'flex';
+
+  const sorts = [{ property: 'Date', direction: 'descending' }];
+  const actSorts = [{ timestamp: 'created_time', direction: 'descending' }];
+
+  const [garminPages, cgmPages, runningPages] = await Promise.all([
+    notionQuery(CONFIG.garmin, sorts),
+    notionQuery(CONFIG.cgm, sorts),
+    notionQuery(CONFIG.running, actSorts),
+  ]);
+
+  DATA.garmin  = garminPages.map(parseGarmin);
+  DATA.cgm     = cgmPages.map(parseCGM);
+  DATA.running = runningPages.map(parseRunning);
+
+  const latestDate = DATA.garmin[0]?.date || 'No data';
+  document.getElementById('sync-date').textContent = latestDate;
+
+  renderToday();
+  renderTraining();
+  renderInsights();
+
+  document.getElementById('loading').style.display = 'none';
+}
+
+/* ═══════════════════════════════════════════════════════════
+   PARSERS
+═══════════════════════════════════════════════════════════ */
+function parseGarmin(p) {
+  return {
+    date:         prop(p,'Date','title'),
+    readiness:    prop(p,'Training Readiness','number'),
+    hrvLast:      prop(p,'HRV Last Night','number'),
+    hrv5d:        prop(p,'HRV 5-Day Avg','number'),
+    hrvStatus:    prop(p,'HRV Status','select'),
+    rhr:          prop(p,'Resting HR','number'),
+    bbLow:        prop(p,'Body Battery Low','number'),
+    bbHigh:       prop(p,'Body Battery High','number'),
+    sleepScore:   prop(p,'Sleep Score','number'),
+    sleepDur:     prop(p,'Sleep Duration','number'),
+    deepPct:      prop(p,'Deep Sleep %','number'),
+    remPct:       prop(p,'REM Sleep %','number'),
+    vo2:          prop(p,'VO2 Max','number'),
+    trainingLoad: prop(p,'Training Load','number'),
+    steps:        prop(p,'Steps','number'),
+    activeCal:    prop(p,'Active Calories','number'),
+    activityType: prop(p,'Activity Type','select'),
+    activityName: prop(p,'Activity Name','text'),
+  };
+}
+
+function parseCGM(p) {
+  return {
+    date:        prop(p,'Date','title'),
+    mean:        prop(p,'Mean Glucose','number'),
+    sd:          prop(p,'Glucose SD','number'),
+    tir:         prop(p,'Time in Range %','number'),
+    tbr:         prop(p,'Time Below Range %','number'),
+    tar:         prop(p,'Time Above Range %','number'),
+    overnight:   prop(p,'Overnight Mean','number'),
+    preWkt:      prop(p,'Pre-Workout Glucose','number'),
+    postWkt:     prop(p,'Post-Workout Glucose','number'),
+    highEvents:  prop(p,'High Events','number'),
+    lowEvents:   prop(p,'Low Events','number'),
+    min:         prop(p,'Daily Min','number'),
+    max:         prop(p,'Daily Max','number'),
+    variability: prop(p,'Glucose Variability','select'),
+  };
+}
+
+function parseRunning(p) {
+  const splitsRaw = prop(p,'Splits JSON','text') || '[]';
+  let splits = [];
+  try { splits = JSON.parse(splitsRaw); } catch(e) {}
+  return {
+    name:          prop(p,'Activity','title'),
+    date:          prop(p,'Date','text'),
+    type:          prop(p,'Activity Type','select'),
+    dist:          prop(p,'Total Distance km','number'),
+    movingMin:     prop(p,'Moving Time min','number'),
+    avgPace:       prop(p,'Avg Pace min/km','number'),
+    runPace:       prop(p,'Run Only Avg Pace min/km','number'),
+    avgHR:         prop(p,'Avg HR','number'),
+    runHR:         prop(p,'Run Only Avg HR','number'),
+    maxHR:         prop(p,'Max HR','number'),
+    cadence:       prop(p,'Avg Cadence spm','number'),
+    gct:           prop(p,'Avg GCT ms','number'),
+    osc:           prop(p,'Avg Vertical Oscillation cm','number'),
+    stride:        prop(p,'Avg Stride Length m','number'),
+    power:         prop(p,'Avg Power W','number'),
+    elevation:     prop(p,'Elevation Gain m','number'),
+    z1:            prop(p,'Zone 1 %','number'),
+    z2:            prop(p,'Zone 2 %','number'),
+    z3:            prop(p,'Zone 3 %','number'),
+    z4:            prop(p,'Zone 4 %','number'),
+    z5:            prop(p,'Zone 5 %','number'),
+    walkMin:       prop(p,'Walk Time Excluded min','number'),
+    te_aerobic:    prop(p,'Training Effect Aerobic','number'),
+    te_anaerobic:  prop(p,'Training Effect Anaerobic','number'),
+    splits,
+  };
+}
+
+/* ═══════════════════════════════════════════════════════════
+   RENDER TODAY
+═══════════════════════════════════════════════════════════ */
+function renderToday() {
+  const g = DATA.garmin[0] || {};
+  const c = DATA.cgm[0] || {};
+
+  // Readiness
+  const r = g.readiness;
+  const rEl = document.getElementById('tile-readiness');
+  rEl.textContent = r ?? '–';
+  rEl.className = 'val ' + scoreColor(r, 70, 50);
+
+  // HRV Status
+  const hrvEl = document.getElementById('tile-hrv-status');
+  const statusMap = { 'Balanced': ['good','✓ BAL'], 'Unbalanced': ['warn','~ UNB'], 'Poor': ['bad','✗ POOR'] };
+  const [hrvClass, hrvText] = statusMap[g.hrvStatus] || ['', '–'];
+  hrvEl.textContent = hrvText;
+  hrvEl.className = 'val ' + hrvClass;
+
+  // Sleep
+  const sEl = document.getElementById('tile-sleep');
+  sEl.textContent = g.sleepScore ?? '–';
+  sEl.className = 'val ' + scoreColor(g.sleepScore, 75, 60);
+
+  // Body Battery
+  set('tile-bb', g.bbHigh ?? '–');
+  set('tile-hrv-last', g.hrvLast ?? '–');
+  set('tile-hrv-5d', g.hrv5d ?? '–');
+  set('tile-rhr', g.rhr ?? '–');
+
+  // Sleep bars
+  const sleepBarsEl = document.getElementById('sleep-bars');
+  if (g.sleepDur) {
+    sleepBarsEl.innerHTML = `
+      ${barRow('Duration', g.sleepDur, 9, 'h', 'accent')}
+      ${barRow('Deep Sleep', g.deepPct, 100, '%', g.deepPct >= 15 ? 'green' : 'yellow')}
+      ${barRow('REM Sleep', g.remPct, 100, '%', g.remPct >= 20 ? 'green' : 'yellow')}
+    `;
+  } else {
+    sleepBarsEl.innerHTML = '<div class="empty"><div class="empty-icon">💤</div>No sleep data</div>';
+  }
+
+  // CGM
+  const tirPct = c.tir ?? 0;
+  document.getElementById('tir-pct').textContent = c.tir != null ? c.tir + '%' : '–';
+  document.getElementById('tir-arc').style.strokeDashoffset = 226.2 - (226.2 * tirPct / 100);
+  document.getElementById('tir-tar').textContent = c.tar != null ? c.tar + '%' : '–';
+  document.getElementById('tir-tir').textContent = c.tir != null ? c.tir + '%' : '–';
+  document.getElementById('tir-tbr').textContent = c.tbr != null ? c.tbr + '%' : '–';
+  document.getElementById('tir-var').textContent = c.variability || '–';
+  document.getElementById('cgm-mean').textContent = c.mean != null ? c.mean + ' mmol/L' : '–';
+  document.getElementById('cgm-overnight').textContent = c.overnight != null ? c.overnight + ' mmol/L' : '–';
+
+  // Cross-correlation insights
+  renderCorrelationInsights(g, c, DATA.garmin, DATA.cgm);
+}
+
+function barRow(label, val, max, unit, colorClass) {
+  const pct = Math.min(100, (val / max) * 100);
+  const display = unit === 'h' ? val.toFixed(1) + 'h' : val.toFixed(0) + unit;
+  return `<div class="bar-row">
+    <span class="bar-label">${label}</span>
+    <div class="bar-track"><div class="bar-fill ${colorClass}" style="width:${pct}%"></div></div>
+    <span class="bar-val">${display}</span>
+  </div>`;
+}
+
+function scoreColor(v, good, warn) {
+  if (v == null) return '';
+  if (v >= good) return 'good';
+  if (v >= warn) return 'warn';
+  return 'bad';
+}
+
+function set(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   CROSS-CORRELATION INSIGHTS
+═══════════════════════════════════════════════════════════ */
+function renderCorrelationInsights(g, c, garminHistory, cgmHistory) {
+  const container = document.getElementById('correlation-insights');
+  const insights = [];
+
+  // 1. Glucose → Sleep
+  if (c.overnight != null && g.sleepScore != null) {
+    const poorGlucose = c.overnight > 7.5 || c.tar > 25;
+    const poorSleep = g.sleepScore < 65;
+    if (poorGlucose && poorSleep) {
+      insights.push({
+        type: 'warning', icon: '🌙',
+        title: 'Glucose disrupted sleep',
+        body: `Overnight glucose averaged <strong>${c.overnight} mmol/L</strong> with <strong>${c.tar}% above range</strong>. Your sleep score of <strong>${g.sleepScore}</strong> reflects the impact — elevated glucose promotes cortisol and lighter sleep stages.`
+      });
+    } else if (!poorGlucose && g.sleepScore >= 80) {
+      insights.push({
+        type: 'positive', icon: '✅',
+        title: 'Stable glucose, quality sleep',
+        body: `Overnight glucose was stable at <strong>${c.overnight} mmol/L</strong> with TIR of <strong>${c.tir}%</strong>. This likely contributed to your <strong>${g.sleepScore} sleep score</strong>.`
+      });
+    }
+  }
+
+  // 2. Poor glucose control → next day HRV/readiness
+  if (cgmHistory.length >= 2 && garminHistory.length >= 1) {
+    const prev = cgmHistory[1];
+    const today = garminHistory[0];
+    if (prev.tir != null && prev.tir < 65 && today.readiness != null && today.readiness < 65) {
+      insights.push({
+        type: 'warning', icon: '⚡',
+        title: 'Prior glucose → reduced readiness today',
+        body: `Yesterday's TIR was only <strong>${prev.tir}%</strong> — your body spent time managing glucose excursions. Today's training readiness of <strong>${today.readiness}</strong> and HRV of <strong>${today.hrvLast} ms</strong> may reflect that metabolic stress.`
+      });
+    }
+  }
+
+  // 3. Workout glucose response
+  if (c.preWkt != null && c.postWkt != null) {
+    const delta = (c.postWkt - c.preWkt).toFixed(1);
+    const abs = Math.abs(delta);
+    const dir = delta > 0 ? 'rose' : 'dropped';
+    const type = abs > 3 ? 'warning' : 'positive';
+    insights.push({
+      type, icon: '🏃',
+      title: 'Workout glucose response',
+      body: `Pre-workout: <strong>${c.preWkt} mmol/L</strong> → Post-workout: <strong>${c.postWkt} mmol/L</strong>. Glucose ${dir} by <strong>${abs} mmol/L</strong>. ${abs > 3 ? 'A large drop may signal insufficient fuelling for this intensity.' : 'A stable response suggests good metabolic flexibility.'}`
+    });
+  }
+
+  // 4. HRV trend
+  if (g.hrvLast != null && g.hrv5d != null) {
+    const diff = ((g.hrvLast - g.hrv5d) / g.hrv5d * 100).toFixed(0);
+    if (diff < -15) {
+      insights.push({
+        type: 'negative', icon: '💓',
+        title: 'HRV below 5-day baseline',
+        body: `Last night's HRV (<strong>${g.hrvLast} ms</strong>) is <strong>${Math.abs(diff)}% below</strong> your 5-day average (<strong>${g.hrv5d} ms</strong>). Consider reducing intensity or prioritising recovery today.`
+      });
+    } else if (diff > 10) {
+      insights.push({
+        type: 'positive', icon: '💓',
+        title: 'HRV above baseline — ready to push',
+        body: `HRV of <strong>${g.hrvLast} ms</strong> is <strong>${diff}% above</strong> your 5-day average. Autonomic nervous system is well-recovered — a good day for quality work.`
+      });
+    }
+  }
+
+  if (!insights.length) {
+    container.innerHTML = '';
+    return;
+  }
+
+  const colorMap = { positive: 'green', warning: 'yellow', negative: 'red', info: 'blue' };
+
+  container.innerHTML = `<div class="section-label">Key Correlations</div>` +
+    insights.map(ins => `
+      <div class="insight-card">
+        <div class="insight-header">
+          <div class="insight-icon ${colorMap[ins.type]}">${ins.icon}</div>
+          <div class="insight-title">${ins.title}</div>
+        </div>
+        <div class="insight-body">${ins.body}</div>
+      </div>
+    `).join('');
+}
+
+/* ═══════════════════════════════════════════════════════════
+   RENDER TRAINING
+═══════════════════════════════════════════════════════════ */
+function renderTraining() {
+  const act = DATA.running[0];
+  if (!act) {
+    document.getElementById('la-name').textContent = 'No activities synced yet';
+    return;
+  }
+
+  document.getElementById('la-name').textContent = act.name || 'Activity';
+  set('la-dist', act.dist?.toFixed(2) ?? '–');
+  set('la-pace', act.runPace ? fmtPace(act.runPace) : (act.avgPace ? fmtPace(act.avgPace) : '–'));
+  set('la-hr', act.runHR?.toFixed(0) ?? act.avgHR?.toFixed(0) ?? '–');
+  set('la-cadence', act.cadence?.toFixed(0) ?? '–');
+  set('la-gct', act.gct?.toFixed(0) ?? '–');
+  set('la-osc', act.osc?.toFixed(1) ?? '–');
+  set('la-stride', act.stride?.toFixed(2) ?? '–');
+
+  // HR Zones donut
+  renderZones(act);
+
+  // Splits
+  renderSplits(act.splits);
+}
+
+function fmtPace(minKm) {
+  if (!minKm) return '–';
+  const mins = Math.floor(minKm);
+  const secs = Math.round((minKm - mins) * 60);
+  return `${mins}:${String(secs).padStart(2,'0')}`;
+}
+
+function renderZones(act) {
+  const zones = [
+    { label: 'Z1 Recovery',  val: act.z1, color: '#4f9eff' },
+    { label: 'Z2 Aerobic',   val: act.z2, color: '#3ecf8e' },
+    { label: 'Z3 Tempo',     val: act.z3, color: '#f5c842' },
+    { label: 'Z4 Threshold', val: act.z4, color: '#f28a2e' },
+    { label: 'Z5 VO2',       val: act.z5, color: '#f25757' },
+  ].filter(z => z.val != null && z.val > 0);
+
+  if (!zones.length) return;
+
+  // Find dominant zone
+  const dominant = zones.reduce((a,b) => a.val > b.val ? a : b);
+  document.getElementById('zone-dominant-pct').textContent = dominant.val.toFixed(0) + '%';
+  document.getElementById('zone-dominant-lbl').textContent = dominant.label.split(' ')[0];
+
+  // SVG donut
+  const cx = 40, cy = 40, r = 32, circ = 2 * Math.PI * r;
+  let offset = 0;
+  const svg = document.getElementById('zone-svg');
+  svg.innerHTML = '';
+  zones.forEach(z => {
+    const dash = circ * z.val / 100;
+    const circle = document.createElementNS('http://www.w3.org/2000/svg','circle');
+    circle.setAttribute('cx', cx); circle.setAttribute('cy', cy);
+    circle.setAttribute('r', r); circle.setAttribute('fill', 'none');
+    circle.setAttribute('stroke', z.color); circle.setAttribute('stroke-width', '12');
+    circle.setAttribute('stroke-dasharray', `${dash} ${circ - dash}`);
+    circle.setAttribute('stroke-dashoffset', -offset);
+    svg.appendChild(circle);
+    offset += dash;
+  });
+
+  // Legend
+  const legend = document.getElementById('zone-legend');
+  legend.innerHTML = zones.map(z =>
+    `<div class="zone-legend-item">
+      <div class="zone-dot" style="background:${z.color}"></div>
+      <span style="flex:1">${z.label}</span>
+      <span style="color:var(--text)">${z.val.toFixed(0)}%</span>
+    </div>`
+  ).join('');
+
+  // Bar version
+  const bars = document.getElementById('zone-bars');
+  bars.innerHTML = zones.map(z =>
+    `<div class="bar-row">
+      <span class="bar-label" style="font-size:0.58rem">${z.label.split(' ')[0]}</span>
+      <div class="bar-track"><div class="bar-fill" style="width:${z.val}%;background:${z.color}"></div></div>
+      <span class="bar-val">${z.val.toFixed(0)}%</span>
+    </div>`
+  ).join('');
+}
+
+function renderSplits(splits) {
+  const tbody = document.getElementById('splits-body');
+  if (!splits || !splits.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="color:var(--muted);padding:12px">No split data</td></tr>';
+    return;
+  }
+
+  // Filter walk splits for display
+  const run = splits.filter(s => !s.pace || s.pace < 7.5);
+  const target = run.length ? run : splits;
+
+  // Compute avg pace for colouring
+  const paces = target.map(s => s.pace).filter(Boolean);
+  const avgPace = paces.length ? paces.reduce((a,b)=>a+b,0)/paces.length : null;
+
+  tbody.innerHTML = target.map(s => {
+    const paceStr = s.pace ? fmtPace(s.pace) : '–';
+    let paceClass = '';
+    if (avgPace && s.pace) {
+      if (s.pace < avgPace * 0.98) paceClass = 'split-good';
+      else if (s.pace > avgPace * 1.03) paceClass = 'split-warn';
+    }
+    return `<tr>
+      <td>${s.km}</td>
+      <td class="${paceClass}">${paceStr}</td>
+      <td>${s.hr?.toFixed(0) ?? '–'}</td>
+      <td>${s.cadence?.toFixed(0) ?? '–'}</td>
+      <td>${s.gct_ms?.toFixed(0) ?? '–'}</td>
+    </tr>`;
+  }).join('');
+}
+
+/* ═══════════════════════════════════════════════════════════
+   RENDER INSIGHTS
+═══════════════════════════════════════════════════════════ */
+function setObjective(obj) {
+  currentObjective = obj;
+  document.querySelectorAll('.obj-btn').forEach(b => b.classList.toggle('active', b.dataset.obj === obj));
+  renderInsights();
+}
+
+function renderInsights() {
+  renderWeekChart();
+  generateInsights();
+  generateActions();
+}
+
+function renderWeekChart() {
+  const container = document.getElementById('week-chart');
+  const days = ['M','T','W','T','F','S','S'];
+  const week = DATA.running.slice(0, 7).reverse();
+
+  // Map activities to colours by objective
+  const typeColorMap = {
+    'Zone 2':    'zone2',
+    'Run':       'zone2',
+    'Tempo':     'tempo',
+    'Threshold': 'tempo',
+    'Intervals': 'vo2',
+    'HIIT':      'vo2',
+    'VO2':       'vo2',
+    'HYROX':     'tempo',
+    'Strength':  'purple',
+  };
+
+  const maxLoad = Math.max(...week.map(a => a.dist || 0), 1);
+
+  const activeObj = {
+    zone2:     ['Zone 2','Run'],
+    threshold: ['Tempo','Intervals','HYROX'],
+    vo2:       ['Intervals','HIIT','VO2'],
+  }[currentObjective] || [];
+
+  let matchCount = 0, totalSessions = week.length;
+
+  container.innerHTML = days.map((d,i) => {
+    const act = week[i];
+    const height = act ? Math.max(8, (act.dist / maxLoad) * 52) : 4;
+    const cls = act ? (typeColorMap[act.type] || 'zone2') : 'rest';
+    const isMatch = act && activeObj.some(t => act.type?.includes(t));
+    if (isMatch) matchCount++;
+    return `<div class="week-bar-col">
+      <div class="week-bar ${cls}" style="height:${height}px;opacity:${isMatch||!act?1:0.35}"></div>
+      <span class="week-bar-day">${d}</span>
+    </div>`;
+  }).join('');
+
+  const objLabels = { zone2: 'Zone 2 aerobic base', threshold: 'Threshold / lactate work', vo2: 'VO2max intervals' };
+  const pct = totalSessions ? Math.round(matchCount/totalSessions*100) : 0;
+  document.getElementById('week-summary').innerHTML =
+    `<strong style="color:var(--text)">${matchCount}/${totalSessions}</strong> sessions aligned with <strong style="color:var(--accent)">${objLabels[currentObjective]}</strong> goal (${pct}% compliance).`;
+}
+
+function generateInsights() {
+  const container = document.getElementById('insights-list');
+  const insights = [];
+
+  const cgmAvg = avg(DATA.cgm.slice(0,7).map(c => c.tir));
+  const tirTrend = trendStr(DATA.cgm.slice(0,7).map(c => c.tir));
+
+  const hrvAvg = avg(DATA.garmin.slice(0,7).map(g => g.hrvLast));
+  const readAvg = avg(DATA.garmin.slice(0,7).map(g => g.readiness));
+
+  // Glucose-Sleep correlation (7-day)
+  const glucoseSleepPairs = DATA.garmin.slice(0,7).map(g => {
+    const c = DATA.cgm.find(c => c.date === g.date);
+    return c ? { sleep: g.sleepScore, tir: c.tir, overnight: c.overnight } : null;
+  }).filter(Boolean);
+
+  const poorNights = glucoseSleepPairs.filter(p => p.overnight > 7.5 && p.sleep < 70);
+  if (poorNights.length >= 2) {
+    insights.push({
+      type: 'warning', icon: '🌙', colorClass: 'yellow',
+      title: `${poorNights.length} nights: high glucose → poor sleep`,
+      body: `On nights where overnight glucose exceeded <strong>7.5 mmol/L</strong>, sleep scores averaged <strong>${avg(poorNights.map(p=>p.sleep)).toFixed(0)}</strong>. Stable bedtime glucose (under 7 mmol/L) correlates with better sleep quality.`
+    });
+  }
+
+  // Training load vs recovery
+  const highLoadDays = DATA.garmin.slice(0,7).filter(g => g.trainingLoad > 200);
+  const lowHRVdays = DATA.garmin.slice(0,7).filter(g => g.hrv5d && g.hrvLast && g.hrvLast < g.hrv5d * 0.85);
+  if (highLoadDays.length > 0 && lowHRVdays.length > 0) {
+    insights.push({
+      type: 'warning', icon: '⚡', colorClass: 'yellow',
+      title: 'High training load suppressing HRV',
+      body: `${highLoadDays.length} high-load sessions this week. On ${lowHRVdays.length} mornings, HRV was <strong>>15% below baseline</strong>. Monitor cumulative load before adding intensity.`
+    });
+  }
+
+  // Zone distribution vs objective
+  const weekRuns = DATA.running.slice(0,7);
+  const avgZ2 = avg(weekRuns.map(r => r.z2));
+  if (currentObjective === 'zone2' && avgZ2 < 50) {
+    insights.push({
+      type: 'info', icon: '🫁', colorClass: 'blue',
+      title: 'Zone 2 below target distribution',
+      body: `Average Zone 2 time this week was <strong>${avgZ2.toFixed(0)}%</strong>. For aerobic base building, aim for <strong>60–70% Zone 2</strong>. Consider reducing pace on easy runs.`
+    });
+  }
+
+  // Glucose around training
+  const wktPairs = DATA.cgm.slice(0,7).filter(c => c.preWkt && c.postWkt);
+  if (wktPairs.length >= 2) {
+    const avgPre = avg(wktPairs.map(c => c.preWkt));
+    const avgPost = avg(wktPairs.map(c => c.postWkt));
+    const delta = (avgPost - avgPre).toFixed(1);
+    insights.push({
+      type: 'info', icon: '🏋️', colorClass: 'blue',
+      title: 'Workout glucose response pattern',
+      body: `Avg pre-workout: <strong>${avgPre.toFixed(1)} mmol/L</strong> → post: <strong>${avgPost.toFixed(1)} mmol/L</strong> (Δ ${delta > 0 ? '+':''}${delta}). ${Math.abs(delta) > 2.5 ? 'Large swings suggest reviewing pre-workout nutrition timing.' : 'Metabolic response is stable during training.'}`
+    });
+  }
+
+  // VO2 Max trend
+  const vo2vals = DATA.garmin.slice(0,14).map(g => g.vo2).filter(Boolean);
+  if (vo2vals.length >= 3) {
+    const trend = vo2vals[0] - vo2vals[vo2vals.length-1];
+    if (trend > 0.5) {
+      insights.push({
+        type: 'positive', icon: '📈', colorClass: 'green',
+        title: 'VO2 Max trending up',
+        body: `VO2 Max has improved by <strong>+${trend.toFixed(1)} ml/kg/min</strong> over the tracked period — current: <strong>${vo2vals[0]}</strong>. Training adaptations are taking effect.`
+      });
+    }
+  }
+
+  if (!insights.length) {
+    insights.push({
+      type: 'info', icon: '📊', colorClass: 'blue',
+      title: 'Building your insight profile',
+      body: 'Insights will appear after 7+ days of synced data. Correlation patterns between glucose, sleep, HRV, and training will surface automatically.'
+    });
+  }
+
+  container.innerHTML = insights.map(ins => `
+    <div class="insight-card">
+      <div class="insight-header">
+        <div class="insight-icon ${ins.colorClass}">${ins.icon}</div>
+        <div class="insight-title">${ins.title}</div>
+      </div>
+      <div class="insight-body">${ins.body}</div>
+    </div>
+  `).join('');
+}
+
+function generateActions() {
+  const container = document.getElementById('actions-list');
+  const g = DATA.garmin[0] || {};
+  const c = DATA.cgm[0] || {};
+  const cgm7 = DATA.cgm.slice(0,7);
+  const weekRuns = DATA.running.slice(0,7);
+
+  // Training action based on objective + current state
+  let trainAction = { title: '', body: '' };
+  const avgZ2 = avg(weekRuns.map(r => r.z2));
+  const load = g.trainingLoad;
+
+  if (currentObjective === 'zone2') {
+    trainAction = {
+      title: avgZ2 < 55 ? 'Add a 60-min Zone 2 long run' : 'Extend longest Zone 2 session by 15 min',
+      body: avgZ2 < 55
+        ? `Zone 2 time is averaging <strong>${avgZ2.toFixed(0)}%</strong> this week. Schedule a dedicated easy-effort run keeping HR in <strong>Zone 2 (${getBounds(g, 2)})</strong> for 60+ minutes. No surges.`
+        : `Good Zone 2 compliance. Progress overload by extending your longest easy session. Keep effort conversational — if you can't hold a sentence, slow down.`
+    };
+  } else if (currentObjective === 'threshold') {
+    trainAction = {
+      title: 'Schedule a lactate threshold session',
+      body: `Add a <strong>20-30 min threshold block</strong> at comfortably-hard effort (Zone 3-4). Structure: 2×15 min at threshold pace with 5 min easy between. Based on your recent data, threshold pace should be around <strong>${getThresholdPace(weekRuns)}</strong>.`
+    };
+  } else {
+    trainAction = {
+      title: 'VO2max interval session',
+      body: `Schedule <strong>6×3 min intervals at Zone 4-5</strong> with equal recovery. Your current VO2 Max of <strong>${g.vo2 ?? '–'}</strong> will respond well to high-intensity stimulus. Ensure readiness ≥65 before attempting — current: <strong>${g.readiness ?? '–'}</strong>.`
+    };
+  }
+
+  // Glucose action based on CGM patterns
+  const poorOvernightCount = cgm7.filter(c => c.overnight > 7.5).length;
+  const tirAvg = avg(cgm7.map(c => c.tir));
+  let glucoseAction = { title: '', body: '' };
+
+  if (poorOvernightCount >= 2) {
+    glucoseAction = {
+      title: 'Address overnight glucose spikes',
+      body: `<strong>${poorOvernightCount} nights</strong> of elevated overnight glucose (>7.5 mmol/L) this week. Try: ① Move the final meal 2-3 hours before bed, ② Include a 10-min walk after dinner, ③ Avoid refined carbs in the evening. This should improve sleep quality measurably.`
+    };
+  } else if (tirAvg < 70) {
+    glucoseAction = {
+      title: 'Improve daytime time-in-range',
+      body: `Weekly average TIR is <strong>${tirAvg.toFixed(0)}%</strong> — below the 70% target. The most impactful change: <strong>10 min post-meal walking</strong> after your largest meal. Reduces post-meal spikes by 20-30% without any dietary change.`
+    };
+  } else {
+    glucoseAction = {
+      title: 'Optimise pre-workout fuelling timing',
+      body: c.preWkt != null
+        ? `Pre-workout glucose of <strong>${c.preWkt} mmol/L</strong> — experiment with eating <strong>90 min before</strong> sessions for higher-intensity work, and <strong>fasted</strong> for Zone 2 runs to improve fat oxidation.`
+        : 'Glucose control is solid. Focus on meal timing relative to training — eating 90 min before intensity work and going fasted for Zone 2 runs improves metabolic flexibility.'
+    };
+  }
+
+  container.innerHTML = `
+    <div class="action-card training">
+      <div class="action-label training">🎯 Training Priority</div>
+      <div class="action-title">${trainAction.title}</div>
+      <div class="action-body">${trainAction.body}</div>
+    </div>
+    <div class="action-card glucose">
+      <div class="action-label glucose">🩸 Glucose Priority</div>
+      <div class="action-title">${glucoseAction.title}</div>
+      <div class="action-body">${glucoseAction.body}</div>
+    </div>
+  `;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   UTILS
+═══════════════════════════════════════════════════════════ */
+function avg(arr) {
+  const v = arr.filter(x => x != null);
+  return v.length ? v.reduce((a,b)=>a+b,0)/v.length : 0;
+}
+
+function trendStr(arr) {
+  const v = arr.filter(x => x != null);
+  if (v.length < 2) return 'stable';
+  return v[0] > v[v.length-1] ? '↑' : '↓';
+}
+
+function getBounds(g, zone) {
+  // Rough zone bounds from resting + max HR
+  const rhr = g.rhr || 50;
+  const maxHR = 220 - 30; // placeholder; would use Garmin's actual zones ideally
+  const hrr = maxHR - rhr;
+  const z = { 1:[0.5,0.6], 2:[0.6,0.7], 3:[0.7,0.8], 4:[0.8,0.9], 5:[0.9,1.0] }[zone];
+  return `${Math.round(rhr+hrr*z[0])}–${Math.round(rhr+hrr*z[1])} bpm`;
+}
+
+function getThresholdPace(runs) {
+  const tempoRuns = runs.filter(r => r.type === 'Tempo' || r.type === 'Intervals');
+  if (tempoRuns.length) {
+    const p = avg(tempoRuns.map(r => r.runPace || r.avgPace));
+    return fmtPace(p) + ' /km';
+  }
+  const allRuns = runs.filter(r => r.runPace);
+  if (allRuns.length) {
+    const p = avg(allRuns.map(r => r.runPace)) * 0.94; // ~threshold is 94% of easy pace speed
+    return fmtPace(p) + ' /km';
+  }
+  return '–';
+}
+
+/* ═══════════════════════════════════════════════════════════
+   NAV
+═══════════════════════════════════════════════════════════ */
+function switchScreen(name, btn) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('screen-' + name).classList.add('active');
+  btn.classList.add('active');
+}
+
+/* ═══════════════════════════════════════════════════════════
+   INIT
+═══════════════════════════════════════════════════════════ */
+window.addEventListener('load', () => {
+  loadConfig();
+  if (CONFIG.token && CONFIG.garmin) {
+    loadData();
+  } else {
+    document.getElementById('loading').style.display = 'none';
+    switchScreen('settings', document.querySelectorAll('.nav-btn')[3]);
+  }
+});
+</script>
+</body>
+</html>
