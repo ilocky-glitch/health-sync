@@ -1,1 +1,65 @@
+name: Daily Health Sync
 
+on:
+  schedule:
+    # 8:30 AM Singapore Time = 00:30 UTC
+    - cron: '30 0 * * *'
+  workflow_dispatch:
+    inputs:
+      sync_date:
+        description: 'Date to sync (YYYY-MM-DD). Leave blank for yesterday.'
+        required: false
+        default: ''
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Determine sync date
+        id: date
+        run: |
+          if [ -n "${{ github.event.inputs.sync_date }}" ]; then
+            echo "SYNC_DATE=${{ github.event.inputs.sync_date }}" >> $GITHUB_ENV
+          else
+            echo "SYNC_DATE=$(date -d 'yesterday' '+%Y-%m-%d')" >> $GITHUB_ENV
+          fi
+          echo "Syncing date: $SYNC_DATE"
+
+      - name: Run Garmin sync
+        env:
+          GARMIN_EMAIL:    ${{ secrets.GARMIN_EMAIL }}
+          GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
+          NOTION_TOKEN:    ${{ secrets.NOTION_TOKEN }}
+          NOTION_DB_GARMIN: ${{ secrets.NOTION_DB_GARMIN }}
+          NOTION_DB_RUNNING: ${{ secrets.NOTION_DB_RUNNING }}
+          SYNC_DATE: ${{ env.SYNC_DATE }}
+        run: python scripts/garmin_sync.py
+
+      - name: Run Dexcom sync
+        env:
+          DEXCOM_USERNAME: ${{ secrets.DEXCOM_USERNAME }}
+          DEXCOM_PASSWORD: ${{ secrets.DEXCOM_PASSWORD }}
+          DEXCOM_REGION:   ous
+          NOTION_TOKEN:    ${{ secrets.NOTION_TOKEN }}
+          NOTION_DB_CGM:   ${{ secrets.NOTION_DB_CGM }}
+          SYNC_DATE: ${{ env.SYNC_DATE }}
+        run: python scripts/dexcom_sync.py
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Health sync failed for ${{ env.SYNC_DATE }}"
+          echo "Check logs above for details."
