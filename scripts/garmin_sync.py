@@ -3,6 +3,9 @@ garmin_sync.py
 Pulls daily metrics + running activities from Garmin Connect
 and upserts into Notion databases.
 
+Uses token caching to avoid Garmin's rate limiting — logs in once,
+saves the OAuth token, reuses it on subsequent runs.
+
 Databases targeted:
   🏃 Garmin Daily Metrics   → NOTION_DB_GARMIN
   ⚡ Running Performance Log → NOTION_DB_RUNNING
@@ -25,13 +28,15 @@ DB_RUNNING      = os.environ["NOTION_DB_RUNNING"]
 GARMIN_EMAIL    = os.environ["GARMIN_EMAIL"]
 GARMIN_PASSWORD = os.environ["GARMIN_PASSWORD"]
 
+# Token cache file — persisted via GitHub Actions cache between runs
+TOKEN_STORE = "/tmp/garmin_tokens.json"
+
 NOTION_HEADERS = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
     "Content-Type": "application/json",
     "Notion-Version": "2022-06-28",
 }
 
-# Walk pace threshold: laps slower than this (min/km) are excluded from run metrics
 WALK_THRESHOLD_MIN_KM = 7.5
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -53,7 +58,6 @@ def notion_update(page_id: str, props: dict):
     r.raise_for_status()
 
 def upsert(db_id: str, title_prop: str, title_value: str, props: dict):
-    """Create or update a Notion page matched by title."""
     existing = notion_query(db_id, {
         "property": title_prop,
         "title": {"equals": title_value}
@@ -86,40 +90,62 @@ def safe(d: dict, *keys, default=None):
             return default
     return d
 
-def ms_to_min_per_km(ms: float) -> float | None:
-    """Convert m/s pace to min/km."""
+def ms_to_min_per_km(ms: float):
     if not ms or ms <= 0:
         return None
     return round(1000 / ms / 60, 3)
 
-def sec_to_min(s) -> float | None:
+def sec_to_min(s):
     if s is None:
         return None
     return round(float(s) / 60, 2)
 
-# ── Garmin connection ─────────────────────────────────────────────────────────
+# ── Garmin connection with token caching ──────────────────────────────────────
 def connect_garmin() -> Garmin:
-    """Connect with retry logic to handle Garmin rate limiting (429 errors)."""
-    max_retries = 5
-    retry_delays = [30, 60, 120, 180, 300]  # seconds between retries
+    """
+    Connect to Garmin using cached OAuth tokens where possible.
+    Token caching avoids repeated logins which trigger Garmin's 429 rate limit.
+    Falls back to fresh login if token is missing or expired.
+    """
+    client = Garmin(GARMIN_EMAIL, GARMIN_PASSWORD)
+
+    # Try loading cached token first
+    if os.path.exists(TOKEN_STORE):
+        print("  Found cached Garmin token, attempting to reuse…")
+        try:
+            client.garth.load(TOKEN_STORE)
+            # Test the token with a lightweight call
+            client.get_full_name()
+            print("  ✓ Connected using cached token")
+            return client
+        except Exception as e:
+            print(f"  Cached token invalid ({e}), falling back to fresh login…")
+
+    # Fresh login with retry
+    max_retries = 4
+    retry_delays = [60, 120, 180, 300]
 
     for attempt in range(max_retries):
         try:
-            print(f"Connecting to Garmin Connect… (attempt {attempt + 1}/{max_retries})")
+            print(f"  Fresh login attempt {attempt + 1}/{max_retries}…")
             client = Garmin(GARMIN_EMAIL, GARMIN_PASSWORD)
             client.login()
-            print("  ✓ Connected")
+            # Save token for next run
+            client.garth.dump(TOKEN_STORE)
+            print(f"  ✓ Connected and token cached at {TOKEN_STORE}")
             return client
         except Exception as e:
-            error_str = str(e)
-            if "429" in error_str or "TooManyRequests" in error_str or "Rate Limit" in error_str:
+            err = str(e)
+            if "429" in err or "TooManyRequests" in err or "Rate Limit" in err:
                 if attempt < max_retries - 1:
                     wait = retry_delays[attempt]
-                    print(f"  ⚠ Rate limited by Garmin. Waiting {wait}s before retry…")
+                    print(f"  ⚠ Rate limited. Waiting {wait}s before retry…")
                     time.sleep(wait)
                 else:
-                    print("  ✗ Max retries reached. Garmin rate limit persisting.")
-                    raise
+                    raise RuntimeError(
+                        "Garmin rate limit persisting after all retries. "
+                        "Wait a few hours and re-run the workflow manually."
+                    ) from e
             else:
                 raise
 
@@ -133,7 +159,7 @@ def sync_daily(client: Garmin, date_str: str):
     readiness  = client.get_training_readiness(date_str) or {}
     bb         = client.get_body_battery(date_str, date_str) or []
 
-    # ── Sleep
+    # Sleep
     sleep_summary = safe(sleep, "dailySleepDTO") or {}
     sleep_score   = safe(sleep_summary, "sleepScores", "overall", "value")
     sleep_dur     = safe(sleep_summary, "sleepTimeSeconds")
@@ -144,18 +170,17 @@ def sync_daily(client: Garmin, date_str: str):
         rem_sec  = safe(sleep_summary, "remSleepSeconds")  or 0
         deep_pct = round(deep_sec / sleep_dur * 100, 1)
         rem_pct  = round(rem_sec  / sleep_dur * 100, 1)
-    sleep_dur_h   = round(float(sleep_dur) / 3600, 2) if sleep_dur else None
+    sleep_dur_h = round(float(sleep_dur) / 3600, 2) if sleep_dur else None
 
-    # ── HRV
-    hrv_summary  = safe(hrv, "hrvSummary") or {}
-    hrv_last     = safe(hrv_summary, "lastNight")
-    hrv_5day     = safe(hrv_summary, "lastNight5MinHigh")  # 5-day rolling
-    hrv_status   = safe(hrv_summary, "status") or ""
-    # Normalise status strings
+    # HRV
+    hrv_summary = safe(hrv, "hrvSummary") or {}
+    hrv_last    = safe(hrv_summary, "lastNight")
+    hrv_5day    = safe(hrv_summary, "lastNight5MinHigh")
+    hrv_status  = safe(hrv_summary, "status") or ""
     hrv_status_map = {"BALANCED": "Balanced", "UNBALANCED": "Unbalanced", "POOR": "Poor"}
     hrv_status_clean = hrv_status_map.get(hrv_status.upper(), None)
 
-    # ── Body Battery
+    # Body Battery
     bb_low, bb_high = None, None
     if bb:
         values = [v.get("charged") for d in bb for v in (d.get("bodyBatteryValuesDescriptors") or []) if v.get("charged") is not None]
@@ -163,7 +188,7 @@ def sync_daily(client: Garmin, date_str: str):
             bb_low  = min(values)
             bb_high = max(values)
 
-    # ── Training
+    # Training
     readiness_score = safe(readiness, "score")
     vo2             = safe(stats, "maxMetValue")
     training_load   = safe(stats, "acuteTrainingLoad") or safe(stats, "trainingLoadBalance", "acuteLoad")
@@ -192,71 +217,51 @@ def sync_daily(client: Garmin, date_str: str):
 
     upsert(DB_GARMIN, "Date", date_str, props)
 
-# ── Running / activity sync ───────────────────────────────────────────────────
+# ── Activity sync ─────────────────────────────────────────────────────────────
 ACTIVITY_TYPE_MAP = {
-    "running":          "Run",
-    "trail_running":    "Run",
-    "treadmill_running":"Run",
-    "cycling":          "Cycle",
-    "strength_training":"Strength",
-    "hiit":             "HIIT",
-    "cardio":           "HIIT",
-    "resort_skiing":    "Rest",
+    "running":           "Run",
+    "trail_running":     "Run",
+    "treadmill_running": "Run",
+    "cycling":           "Cycle",
+    "strength_training": "Strength",
+    "hiit":              "HIIT",
+    "cardio":            "HIIT",
 }
 
 def classify_activity(type_key: str, name: str) -> str:
     name_lower = (name or "").lower()
-    if "hyrox" in name_lower:
-        return "HYROX"
-    if "tempo" in name_lower:
-        return "Tempo"
-    if "interval" in name_lower or "fartlek" in name_lower:
-        return "Intervals"
-    if "zone 2" in name_lower or "easy" in name_lower or "recovery" in name_lower:
-        return "Zone 2"
+    if "hyrox" in name_lower:             return "HYROX"
+    if "tempo" in name_lower:             return "Tempo"
+    if "interval" in name_lower:          return "Intervals"
+    if "zone 2" in name_lower or "easy" in name_lower: return "Zone 2"
     return ACTIVITY_TYPE_MAP.get((type_key or "").lower(), "Run")
 
 def compute_run_only_metrics(laps: list) -> dict:
-    """Filter out walk laps (pace > WALK_THRESHOLD) and compute run-only stats."""
     run_laps = []
     walk_time = 0.0
-
     for lap in laps:
         duration = float(lap.get("duration") or lap.get("elapsedDuration") or 0)
         speed    = float(lap.get("averageSpeed") or 0)
         if speed <= 0:
             walk_time += duration
             continue
-        pace = 1000 / speed / 60  # min/km
+        pace = 1000 / speed / 60
         if pace > WALK_THRESHOLD_MIN_KM:
             walk_time += duration
         else:
-            run_laps.append({
-                "duration": duration,
-                "speed":    speed,
-                "hr":       lap.get("averageHR") or lap.get("averageHeartRate"),
-                "distance": float(lap.get("distance") or 0),
-            })
-
+            run_laps.append({"duration": duration, "speed": speed,
+                             "hr": lap.get("averageHR") or lap.get("averageHeartRate"),
+                             "distance": float(lap.get("distance") or 0)})
     if not run_laps:
         return {"walk_min": round(walk_time / 60, 2), "run_pace": None, "run_hr": None}
-
     total_dist = sum(l["distance"] for l in run_laps)
     total_time = sum(l["duration"] for l in run_laps)
-
     run_pace = ms_to_min_per_km(total_dist / total_time) if total_time > 0 else None
-
-    hr_vals = [l["hr"] for l in run_laps if l["hr"]]
-    run_hr  = round(sum(hr_vals) / len(hr_vals), 1) if hr_vals else None
-
-    return {
-        "walk_min":  round(walk_time / 60, 2),
-        "run_pace":  run_pace,
-        "run_hr":    run_hr,
-    }
+    hr_vals  = [l["hr"] for l in run_laps if l["hr"]]
+    run_hr   = round(sum(hr_vals) / len(hr_vals), 1) if hr_vals else None
+    return {"walk_min": round(walk_time / 60, 2), "run_pace": run_pace, "run_hr": run_hr}
 
 def extract_hr_zones(details: dict) -> dict:
-    """Extract zone time percentages from activity details."""
     zones = {}
     hr_zones = safe(details, "heartRateZones") or []
     if not hr_zones:
@@ -270,7 +275,6 @@ def extract_hr_zones(details: dict) -> dict:
     return zones
 
 def extract_splits(laps: list) -> str:
-    """Return a compact JSON string of per-km splits."""
     splits = []
     for i, lap in enumerate(laps, 1):
         speed = float(lap.get("averageSpeed") or 0)
@@ -285,7 +289,6 @@ def extract_splits(laps: list) -> str:
 
 def sync_activities(client: Garmin, date_str: str):
     print(f"\n── Activities for {date_str} ──")
-
     activities = client.get_activities_by_date(date_str, date_str) or []
     if not activities:
         print("  No activities found.")
@@ -296,13 +299,11 @@ def sync_activities(client: Garmin, date_str: str):
         act_name = act.get("activityName") or f"Activity {act_id}"
         type_key = safe(act, "activityType", "typeKey") or ""
         act_type = classify_activity(type_key, act_name)
-
         print(f"  Processing: {act_name} [{act_type}]")
 
-        # Detailed data
         try:
             details = client.get_activity(act_id) or {}
-            time.sleep(0.5)  # rate limit
+            time.sleep(0.5)
         except Exception as e:
             print(f"    ⚠ Could not fetch details: {e}")
             details = {}
@@ -316,35 +317,27 @@ def sync_activities(client: Garmin, date_str: str):
             print(f"    ⚠ Could not fetch splits: {e}")
             laps = []
 
-        # Core stats
-        distance_km   = round(float(act.get("distance") or 0) / 1000, 3)
-        moving_time   = sec_to_min(act.get("movingDuration") or act.get("duration"))
-        elapsed_time  = sec_to_min(act.get("elapsedDuration") or act.get("duration"))
-        avg_hr        = act.get("averageHR")
-        max_hr        = act.get("maxHR")
-        avg_speed     = float(act.get("averageSpeed") or 0)
-        best_speed    = float(act.get("maxSpeed") or 0)
-        avg_cadence   = act.get("averageRunningCadenceInStepsPerMinute") or act.get("averageBikingCadenceInRevPerMinute")
-        elevation     = act.get("elevationGain")
-        te_aerobic    = act.get("aerobicTrainingEffect")
-        te_anaerobic  = act.get("anaerobicTrainingEffect")
-        perf_cond     = safe(details, "summaryDTO", "trainingEffect") or act.get("performanceCondition")
+        distance_km  = round(float(act.get("distance") or 0) / 1000, 3)
+        moving_time  = sec_to_min(act.get("movingDuration") or act.get("duration"))
+        elapsed_time = sec_to_min(act.get("elapsedDuration") or act.get("duration"))
+        avg_hr       = act.get("averageHR")
+        max_hr       = act.get("maxHR")
+        avg_speed    = float(act.get("averageSpeed") or 0)
+        best_speed   = float(act.get("maxSpeed") or 0)
+        avg_cadence  = act.get("averageRunningCadenceInStepsPerMinute") or act.get("averageBikingCadenceInRevPerMinute")
+        elevation    = act.get("elevationGain")
+        te_aerobic   = act.get("aerobicTrainingEffect")
+        te_anaerobic = act.get("anaerobicTrainingEffect")
 
-        # Running dynamics from details
-        dyn = safe(details, "summaryDTO") or {}
-        avg_gct       = dyn.get("avgGroundContactTime")
-        avg_osc       = dyn.get("avgVerticalOscillation")
-        avg_stride    = dyn.get("avgStrideLength")
-        avg_power     = dyn.get("avgPower")
+        dyn        = safe(details, "summaryDTO") or {}
+        avg_gct    = dyn.get("avgGroundContactTime")
+        avg_osc    = dyn.get("avgVerticalOscillation")
+        avg_stride = dyn.get("avgStrideLength")
+        avg_power  = dyn.get("avgPower")
 
-        # HR zones
-        zone_data = extract_hr_zones(details)
-
-        # Splits
-        splits_json = extract_splits(laps) if laps else "[]"
-
-        # Walk-filtered run metrics
-        run_metrics = compute_run_only_metrics(laps) if laps else {}
+        zone_data    = extract_hr_zones(details)
+        splits_json  = extract_splits(laps) if laps else "[]"
+        run_metrics  = compute_run_only_metrics(laps) if laps else {}
 
         props = {
             "Activity":                    title_prop(act_name),
@@ -369,11 +362,8 @@ def sync_activities(client: Garmin, date_str: str):
             "Run Only Avg HR":             number_prop(run_metrics.get("run_hr")),
             "Training Effect Aerobic":     number_prop(te_aerobic),
             "Training Effect Anaerobic":   number_prop(te_anaerobic),
-            "Performance Condition":       number_prop(perf_cond),
             "Garmin Activity ID":          text_prop(str(act_id)),
         }
-
-        # Merge zone percentages
         for z in range(1, 6):
             props[f"Zone {z} %"] = number_prop(zone_data.get(f"Zone {z} %"))
 
@@ -381,17 +371,14 @@ def sync_activities(client: Garmin, date_str: str):
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 def main():
-    # Default: yesterday (so data is complete after midnight sync)
     target_date = os.environ.get(
         "SYNC_DATE",
         (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
     )
     print(f"🔄 Garmin sync starting for {target_date}")
-
     client = connect_garmin()
     sync_daily(client, target_date)
     sync_activities(client, target_date)
-
     print("\n✅ Garmin sync complete.")
 
 if __name__ == "__main__":
