@@ -14,7 +14,7 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -29,7 +29,6 @@ jobs:
         run: pip install -r scripts/requirements.txt
 
       - name: Determine sync date
-        id: date
         run: |
           if [ -n "${{ github.event.inputs.sync_date }}" ]; then
             echo "SYNC_DATE=${{ github.event.inputs.sync_date }}" >> $GITHUB_ENV
@@ -38,15 +37,34 @@ jobs:
           fi
           echo "Syncing date: $SYNC_DATE"
 
+      # ── Restore cached Garmin token ──────────────────────────────────────
+      # This is the key fix: reusing the OAuth token avoids triggering
+      # Garmin's rate limiter on every run.
+      - name: Restore Garmin token cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/garmin_tokens.json
+          key: garmin-token-${{ secrets.GARMIN_EMAIL }}
+          restore-keys: |
+            garmin-token-
+
       - name: Run Garmin sync
         env:
-          GARMIN_EMAIL:    ${{ secrets.GARMIN_EMAIL }}
-          GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
-          NOTION_TOKEN:    ${{ secrets.NOTION_TOKEN }}
-          NOTION_DB_GARMIN: ${{ secrets.NOTION_DB_GARMIN }}
+          GARMIN_EMAIL:      ${{ secrets.GARMIN_EMAIL }}
+          GARMIN_PASSWORD:   ${{ secrets.GARMIN_PASSWORD }}
+          NOTION_TOKEN:      ${{ secrets.NOTION_TOKEN }}
+          NOTION_DB_GARMIN:  ${{ secrets.NOTION_DB_GARMIN }}
           NOTION_DB_RUNNING: ${{ secrets.NOTION_DB_RUNNING }}
-          SYNC_DATE: ${{ env.SYNC_DATE }}
+          SYNC_DATE:         ${{ env.SYNC_DATE }}
         run: python scripts/garmin_sync.py
+
+      # ── Save updated token back to cache ────────────────────────────────
+      - name: Save Garmin token cache
+        if: always()
+        uses: actions/cache@v4
+        with:
+          path: /tmp/garmin_tokens.json
+          key: garmin-token-${{ secrets.GARMIN_EMAIL }}-${{ github.run_id }}
 
       - name: Run Dexcom sync
         env:
@@ -55,11 +73,9 @@ jobs:
           DEXCOM_REGION:   ous
           NOTION_TOKEN:    ${{ secrets.NOTION_TOKEN }}
           NOTION_DB_CGM:   ${{ secrets.NOTION_DB_CGM }}
-          SYNC_DATE: ${{ env.SYNC_DATE }}
+          SYNC_DATE:       ${{ env.SYNC_DATE }}
         run: python scripts/dexcom_sync.py
 
       - name: Notify on failure
         if: failure()
-        run: |
-          echo "::error::Health sync failed for ${{ env.SYNC_DATE }}"
-          echo "Check logs above for details."
+        run: echo "::error::Health sync failed for ${{ env.SYNC_DATE }}"
