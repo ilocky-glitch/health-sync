@@ -77,8 +77,7 @@ def sec_to_min(s):
 def connect_garmin():
     """
     Connect using saved OAuth token — no login, no OTP, no rate limits.
-    Writes both oauth1 and oauth2 token files so garth loads cleanly.
-    Skips display name verification to avoid GarminConnectConnectionError.
+    Patches display_name directly to bypass _require_display_name() checks.
     """
     import garth
 
@@ -103,7 +102,10 @@ def connect_garmin():
         client = Garmin()
         client.garth = garth_client
 
-    # Skip get_full_name() — it errors if Garmin profile has no display name set
+    # Patch display_name directly — bypasses _require_display_name() checks
+    # in get_stats() and other methods without needing a separate API call
+    client.display_name = "Jason Lockwood"
+
     print("  Connected to Garmin successfully")
     return client
 
