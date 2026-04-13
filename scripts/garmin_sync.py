@@ -3,8 +3,8 @@ garmin_sync.py
 Pulls daily metrics + running activities from Garmin Connect
 and upserts into Notion databases.
 
-Uses a pre-generated OAuth token stored as GARMIN_OAUTH_TOKEN secret.
-No login required — eliminates 429 rate limit and OTP issues entirely.
+Uses DI OAuth token stored as GARMIN_OAUTH_TOKEN secret.
+Writes token to a persistent temp directory and uses GARMINTOKENS env var.
 
 Env vars required:
   GARMIN_OAUTH_TOKEN  (JSON token generated from Mac)
@@ -29,6 +29,9 @@ NOTION_HEADERS = {
 }
 
 WALK_THRESHOLD_MIN_KM = 7.5
+
+# Create token directory at module level so it persists for all API calls
+TOKEN_DIR = tempfile.mkdtemp()
 
 def notion_query(db_id, filter_payload):
     url = f"https://api.notion.com/v1/databases/{db_id}/query"
@@ -76,23 +79,26 @@ def sec_to_min(s):
 
 def connect_garmin():
     """
-    Connect using saved OAuth token loaded directly into garth memory.
-    No temp files — avoids auth loss when temp dir is cleaned up.
+    Connect using DI OAuth token written to a persistent temp directory.
+    Uses GARMINTOKENS env var — correct method for new garminconnect library.
+    No garth dependency — uses native DI token format.
     """
-    import garth
-
     print("Connecting to Garmin using saved OAuth token...")
     token_data = json.loads(GARMIN_OAUTH_TOKEN)
 
-    # Create garth client and load OAuth2 token directly into memory
-    garth_client = garth.Client()
-    garth_client.oauth2_token = garth.auth.OAuth2Token(**token_data)
+    # Write token as garmin_tokens.json — new DI format
+    token_file = os.path.join(TOKEN_DIR, "garmin_tokens.json")
+    with open(token_file, "w") as f:
+        json.dump(token_data, f)
 
-    # Create Garmin client and inject garth
+    # Tell garminconnect where to find the token
+    os.environ["GARMINTOKENS"] = TOKEN_DIR
+
+    # Initialise client — loads token from GARMINTOKENS automatically
     client = Garmin()
-    client.garth = garth_client
     client.display_name = "Jason Lockwood"
 
+    print(f"  Token written to {TOKEN_DIR}")
     print("  Connected to Garmin successfully")
     return client
 
