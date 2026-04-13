@@ -76,34 +76,21 @@ def sec_to_min(s):
 
 def connect_garmin():
     """
-    Connect using saved OAuth token — no login, no OTP, no rate limits.
-    Patches display_name directly to bypass _require_display_name() checks.
+    Connect using saved OAuth token loaded directly into garth memory.
+    No temp files — avoids auth loss when temp dir is cleaned up.
     """
     import garth
 
     print("Connecting to Garmin using saved OAuth token...")
     token_data = json.loads(GARMIN_OAUTH_TOKEN)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Write oauth2 token
-        with open(os.path.join(tmpdir, "oauth2_token.json"), "w") as f:
-            json.dump(token_data, f)
-        # Write oauth1 placeholder — garth requires this file to exist
-        oauth1 = {
-            "oauth_token": token_data.get("jti", "placeholder"),
-            "oauth_token_secret": "",
-            "mfa_token": None
-        }
-        with open(os.path.join(tmpdir, "oauth1_token.json"), "w") as f:
-            json.dump(oauth1, f)
+    # Create garth client and load OAuth2 token directly into memory
+    garth_client = garth.Client()
+    garth_client.oauth2_token = garth.auth.OAuth2Token(**token_data)
 
-        garth_client = garth.Client()
-        garth_client.load(tmpdir)
-        client = Garmin()
-        client.garth = garth_client
-
-    # Patch display_name directly — bypasses _require_display_name() checks
-    # in get_stats() and other methods without needing a separate API call
+    # Create Garmin client and inject garth
+    client = Garmin()
+    client.garth = garth_client
     client.display_name = "Jason Lockwood"
 
     print("  Connected to Garmin successfully")
