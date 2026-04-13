@@ -7,7 +7,7 @@ Uses a pre-generated OAuth token stored as GARMIN_OAUTH_TOKEN secret.
 No login required — eliminates 429 rate limit and OTP issues entirely.
 
 Env vars required:
-  GARMIN_OAUTH_TOKEN  (JSON token from garth)
+  GARMIN_OAUTH_TOKEN  (JSON token generated from Mac)
   NOTION_TOKEN
   NOTION_DB_GARMIN
   NOTION_DB_RUNNING
@@ -55,10 +55,10 @@ def upsert(db_id, title_prop_name, title_value, props):
         notion_create(db_id, props)
         print(f"  Created: {title_value}")
 
-def tp(v):   return {"title": [{"text": {"content": str(v)}}]}
-def np(v):   return {"number": round(float(v), 2) if v is not None else None}
-def sp(v):   return {"select": {"name": v} if v else None}
-def txp(v):  return {"rich_text": [{"text": {"content": str(v)[:2000]}}]}
+def tp(v):  return {"title": [{"text": {"content": str(v)}}]}
+def np(v):  return {"number": round(float(v), 2) if v is not None else None}
+def sp(v):  return {"select": {"name": v} if v else None}
+def txp(v): return {"rich_text": [{"text": {"content": str(v)[:2000]}}]}
 
 def safe(d, *keys, default=None):
     for k in keys:
@@ -75,17 +75,37 @@ def sec_to_min(s):
     return round(float(s) / 60, 2) if s is not None else None
 
 def connect_garmin():
+    """
+    Connect using saved OAuth token — no login, no OTP, no rate limits.
+    Writes both oauth1 and oauth2 token files so garth loads cleanly.
+    """
     import garth
+
     print("Connecting to Garmin using saved OAuth token...")
     token_data = json.loads(GARMIN_OAUTH_TOKEN)
+
     with tempfile.TemporaryDirectory() as tmpdir:
-        token_path = os.path.join(tmpdir, "oauth2_token.json")
-        with open(token_path, "w") as f:
+        # Write oauth2 token
+        with open(os.path.join(tmpdir, "oauth2_token.json"), "w") as f:
             json.dump(token_data, f)
+
+        # Write oauth1 placeholder — garth needs this file to exist
+        oauth1 = {
+            "oauth_token": token_data.get("jti", "placeholder"),
+            "oauth_token_secret": "",
+            "mfa_token": None
+        }
+        with open(os.path.join(tmpdir, "oauth1_token.json"), "w") as f:
+            json.dump(oauth1, f)
+
+        # Load token into garth directly
         garth_client = garth.Client()
         garth_client.load(tmpdir)
+
+        # Inject into Garmin client
         client = Garmin()
         client.garth = garth_client
+
     name = client.get_full_name()
     print(f"  Connected as: {name}")
     return client
@@ -97,6 +117,7 @@ def sync_daily(client, date_str):
     hrv       = client.get_hrv_data(date_str) or {}
     readiness = client.get_training_readiness(date_str) or {}
     bb        = client.get_body_battery(date_str, date_str) or []
+
     sleep_summary = safe(sleep, "dailySleepDTO") or {}
     sleep_score   = safe(sleep_summary, "sleepScores", "overall", "value")
     sleep_dur     = safe(sleep_summary, "sleepTimeSeconds")
@@ -105,10 +126,13 @@ def sync_daily(client, date_str):
         deep_pct = round((safe(sleep_summary, "deepSleepSeconds") or 0) / sleep_dur * 100, 1)
         rem_pct  = round((safe(sleep_summary, "remSleepSeconds") or 0) / sleep_dur * 100, 1)
     sleep_dur_h = round(float(sleep_dur) / 3600, 2) if sleep_dur else None
+
     hrv_summary = safe(hrv, "hrvSummary") or {}
-    hrv_status = {"BALANCED": "Balanced", "UNBALANCED": "Unbalanced", "POOR": "Poor"}.get(
+    hrv_status  = {"BALANCED": "Balanced", "UNBALANCED": "Unbalanced", "POOR": "Poor"}.get(
         (safe(hrv_summary, "status") or "").upper(), None)
+
     bb_vals = [v.get("charged") for d in bb for v in (d.get("bodyBatteryValuesDescriptors") or []) if v.get("charged") is not None]
+
     props = {
         "Date":               tp(date_str),
         "Resting HR":         np(safe(stats, "restingHeartRate")),
@@ -129,8 +153,11 @@ def sync_daily(client, date_str):
     }
     upsert(DB_GARMIN, "Date", date_str, props)
 
-TYPE_MAP = {"running": "Run", "trail_running": "Run", "treadmill_running": "Run",
-            "cycling": "Cycle", "strength_training": "Strength", "hiit": "HIIT", "cardio": "HIIT"}
+TYPE_MAP = {
+    "running": "Run", "trail_running": "Run", "treadmill_running": "Run",
+    "cycling": "Cycle", "strength_training": "Strength",
+    "hiit": "HIIT", "cardio": "HIIT"
+}
 
 def classify(type_key, name):
     n = (name or "").lower()
@@ -153,14 +180,16 @@ def walk_filter(laps):
                         "dist": float(lap.get("distance") or 0)})
     if not run:
         return round(walk_time / 60, 2), None, None
-    td, tt = sum(l["dist"] for l in run), sum(l["dur"] for l in run)
+    td = sum(l["dist"] for l in run)
+    tt = sum(l["dur"] for l in run)
     hrs = [l["hr"] for l in run if l["hr"]]
     return (round(walk_time / 60, 2),
             ms_to_pace(td / tt) if tt else None,
             round(sum(hrs) / len(hrs), 1) if hrs else None)
 
 def hr_zones(details):
-    zones, hz = {}, safe(details, "heartRateZones") or []
+    zones = {}
+    hz = safe(details, "heartRateZones") or []
     total = sum(float(z.get("secsInZone") or 0) for z in hz)
     if total > 0:
         for i, z in enumerate(hz[:5], 1):
@@ -168,11 +197,13 @@ def hr_zones(details):
     return zones
 
 def splits_json(laps):
-    return json.dumps([{"km": i+1, "pace": ms_to_pace(float(l.get("averageSpeed") or 0)),
-                        "hr": l.get("averageHR") or l.get("averageHeartRate"),
-                        "cadence": l.get("averageRunCadence") or l.get("averageCadence"),
-                        "gct_ms": l.get("averageGroundContactTime")}
-                       for i, l in enumerate(laps)])
+    return json.dumps([{
+        "km": i + 1,
+        "pace": ms_to_pace(float(l.get("averageSpeed") or 0)),
+        "hr": l.get("averageHR") or l.get("averageHeartRate"),
+        "cadence": l.get("averageRunCadence") or l.get("averageCadence"),
+        "gct_ms": l.get("averageGroundContactTime")
+    } for i, l in enumerate(laps)])
 
 def sync_activities(client, date_str):
     print(f"\n-- Activities for {date_str} --")
@@ -180,25 +211,31 @@ def sync_activities(client, date_str):
     if not activities:
         print("  No activities found.")
         return
+
     for act in activities:
         act_id   = act.get("activityId")
         act_name = act.get("activityName") or f"Activity {act_id}"
         act_type = classify(safe(act, "activityType", "typeKey"), act_name)
         print(f"  Processing: {act_name} [{act_type}]")
+
         try:
             details = client.get_activity(act_id) or {}
             time.sleep(0.5)
         except Exception as e:
-            print(f"    Warning - Details error: {e}"); details = {}
+            print(f"    Warning - Details: {e}"); details = {}
+
         try:
             laps = client.get_activity_splits(act_id) or []
-            if isinstance(laps, dict): laps = laps.get("lapDTOs") or laps.get("laps") or []
+            if isinstance(laps, dict):
+                laps = laps.get("lapDTOs") or laps.get("laps") or []
             time.sleep(0.5)
         except Exception as e:
-            print(f"    Warning - Splits error: {e}"); laps = []
+            print(f"    Warning - Splits: {e}"); laps = []
+
         walk_min, run_pace, run_hr = walk_filter(laps) if laps else (None, None, None)
         zones = hr_zones(details)
         dyn   = safe(details, "summaryDTO") or {}
+
         props = {
             "Activity":                    tp(act_name),
             "Date":                        txp(date_str),
@@ -226,6 +263,7 @@ def sync_activities(client, date_str):
         }
         for z in range(1, 6):
             props[f"Zone {z} %"] = np(zones.get(f"Zone {z} %"))
+
         upsert(DB_RUNNING, "Activity", act_name, props)
 
 def main():
