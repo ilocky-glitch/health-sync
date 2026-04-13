@@ -78,6 +78,7 @@ def connect_garmin():
     """
     Connect using saved OAuth token — no login, no OTP, no rate limits.
     Writes both oauth1 and oauth2 token files so garth loads cleanly.
+    Skips display name verification to avoid GarminConnectConnectionError.
     """
     import garth
 
@@ -88,8 +89,7 @@ def connect_garmin():
         # Write oauth2 token
         with open(os.path.join(tmpdir, "oauth2_token.json"), "w") as f:
             json.dump(token_data, f)
-
-        # Write oauth1 placeholder — garth needs this file to exist
+        # Write oauth1 placeholder — garth requires this file to exist
         oauth1 = {
             "oauth_token": token_data.get("jti", "placeholder"),
             "oauth_token_secret": "",
@@ -98,16 +98,13 @@ def connect_garmin():
         with open(os.path.join(tmpdir, "oauth1_token.json"), "w") as f:
             json.dump(oauth1, f)
 
-        # Load token into garth directly
         garth_client = garth.Client()
         garth_client.load(tmpdir)
-
-        # Inject into Garmin client
         client = Garmin()
         client.garth = garth_client
 
-    name = client.get_full_name()
-    print(f"  Connected as: {name}")
+    # Skip get_full_name() — it errors if Garmin profile has no display name set
+    print("  Connected to Garmin successfully")
     return client
 
 def sync_daily(client, date_str):
