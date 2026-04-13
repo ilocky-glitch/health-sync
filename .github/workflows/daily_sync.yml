@@ -1,274 +1,71 @@
-"""
-garmin_sync.py
-Pulls daily metrics + running activities from Garmin Connect
-and upserts into Notion databases.
+name: Daily Health Sync
 
-Uses DI OAuth token stored as GARMIN_OAUTH_TOKEN secret.
-Writes token to a temp directory and uses GARMINTOKENS env var
-— the correct approach for the new garminconnect DI auth system.
+on:
+  schedule:
+    # 8:30 AM Singapore Time = 00:30 UTC
+    - cron: '30 0 * * *'
+  workflow_dispatch:
+    inputs:
+      sync_date:
+        description: 'Date to sync (YYYY-MM-DD). Leave blank for yesterday.'
+        required: false
+        default: ''
 
-Env vars required:
-  GARMIN_OAUTH_TOKEN  (JSON token generated from Mac)
-  NOTION_TOKEN
-  NOTION_DB_GARMIN
-  NOTION_DB_RUNNING
-"""
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
 
-import os, json, datetime, time, tempfile
-import requests
-from garminconnect import Garmin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-NOTION_TOKEN       = os.environ["NOTION_TOKEN"]
-DB_GARMIN          = os.environ["NOTION_DB_GARMIN"]
-DB_RUNNING         = os.environ["NOTION_DB_RUNNING"]
-GARMIN_OAUTH_TOKEN = os.environ["GARMIN_OAUTH_TOKEN"]
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-NOTION_HEADERS = {
-    "Authorization": f"Bearer {NOTION_TOKEN}",
-    "Content-Type": "application/json",
-    "Notion-Version": "2022-06-28",
-}
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
 
-WALK_THRESHOLD_MIN_KM = 7.5
+      - name: Determine sync date
+        run: |
+          if [ -n "${{ github.event.inputs.sync_date }}" ]; then
+            echo "SYNC_DATE=${{ github.event.inputs.sync_date }}" >> $GITHUB_ENV
+          else
+            echo "SYNC_DATE=$(date -d 'yesterday' '+%Y-%m-%d')" >> $GITHUB_ENV
+          fi
+          echo "Syncing date: $SYNC_DATE"
 
-# Token directory — persists for the lifetime of the process
-TOKEN_DIR = tempfile.mkdtemp()
+      - name: Run Garmin sync
+        env:
+          GARMIN_OAUTH_TOKEN: ${{ secrets.GARMIN_OAUTH_TOKEN }}
+          NOTION_TOKEN:       ${{ secrets.NOTION_TOKEN }}
+          NOTION_DB_GARMIN:   ${{ secrets.NOTION_DB_GARMIN }}
+          NOTION_DB_RUNNING:  ${{ secrets.NOTION_DB_RUNNING }}
+          SYNC_DATE:          ${{ env.SYNC_DATE }}
+        run: python scripts/garmin_sync.py
 
-def notion_query(db_id, filter_payload):
-    url = f"https://api.notion.com/v1/databases/{db_id}/query"
-    r = requests.post(url, headers=NOTION_HEADERS, json={"filter": filter_payload})
-    r.raise_for_status()
-    return r.json().get("results", [])
+      - name: Run Dexcom sync
+        env:
+          DEXCOM_USERNAME: ${{ secrets.DEXCOM_USERNAME }}
+          DEXCOM_PASSWORD: ${{ secrets.DEXCOM_PASSWORD }}
+          DEXCOM_REGION:   ous
+          NOTION_TOKEN:    ${{ secrets.NOTION_TOKEN }}
+          NOTION_DB_CGM:   ${{ secrets.NOTION_DB_CGM }}
+          SYNC_DATE:       ${{ env.SYNC_DATE }}
+        run: python scripts/dexcom_sync.py
 
-def notion_create(db_id, props):
-    url = "https://api.notion.com/v1/pages"
-    r = requests.post(url, headers=NOTION_HEADERS, json={"parent": {"database_id": db_id}, "properties": props})
-    r.raise_for_status()
+      - name: Run Strength sync
+        env:
+          NOTION_TOKEN:        ${{ secrets.NOTION_TOKEN }}
+          NOTION_DB_STRENGTH:  ${{ secrets.NOTION_DB_STRENGTH }}
+          NOTION_DB_CGM:       ${{ secrets.NOTION_DB_CGM }}
+          NOTION_DB_GARMIN:    ${{ secrets.NOTION_DB_GARMIN }}
+          NOTION_DB_1RM:       ${{ secrets.NOTION_DB_1RM }}
+          SYNC_DATE:           ${{ env.SYNC_DATE }}
+        run: python scripts/strength_sync.py
 
-def notion_update(page_id, props):
-    url = f"https://api.notion.com/v1/pages/{page_id}"
-    r = requests.patch(url, headers=NOTION_HEADERS, json={"properties": props})
-    r.raise_for_status()
-
-def upsert(db_id, title_prop_name, title_value, props):
-    existing = notion_query(db_id, {"property": title_prop_name, "title": {"equals": title_value}})
-    if existing:
-        notion_update(existing[0]["id"], props)
-        print(f"  Updated: {title_value}")
-    else:
-        notion_create(db_id, props)
-        print(f"  Created: {title_value}")
-
-def tp(v):  return {"title": [{"text": {"content": str(v)}}]}
-def np(v):  return {"number": round(float(v), 2) if v is not None else None}
-def sp(v):  return {"select": {"name": v} if v else None}
-def txp(v): return {"rich_text": [{"text": {"content": str(v)[:2000]}}]}
-
-def safe(d, *keys, default=None):
-    for k in keys:
-        if not isinstance(d, dict): return default
-        d = d.get(k, default)
-        if d is None: return default
-    return d
-
-def ms_to_pace(ms):
-    if not ms or ms <= 0: return None
-    return round(1000 / ms / 60, 3)
-
-def sec_to_min(s):
-    return round(float(s) / 60, 2) if s is not None else None
-
-def connect_garmin():
-    """
-    Connect using DI OAuth token written to a temp directory.
-    Uses GARMINTOKENS env var — the correct method for new garminconnect.
-    Token directory is created at module level so it persists for all API calls.
-    """
-    print("Connecting to Garmin using saved OAuth token...")
-    token_data = json.loads(GARMIN_OAUTH_TOKEN)
-
-    # Write token to persistent temp directory
-    token_file = os.path.join(TOKEN_DIR, "garmin_tokens.json")
-    with open(token_file, "w") as f:
-        json.dump(token_data, f)
-
-    # Set GARMINTOKENS so garminconnect finds the token directory
-    os.environ["GARMINTOKENS"] = TOKEN_DIR
-
-    # Initialise client — it will auto-load from GARMINTOKENS
-    client = Garmin()
-    client.display_name = "Jason Lockwood"
-
-    print(f"  Token written to {token_file}")
-    print("  Connected to Garmin successfully")
-    return client
-
-def sync_daily(client, date_str):
-    print(f"\n-- Daily metrics for {date_str} --")
-    stats     = client.get_stats(date_str) or {}
-    sleep     = client.get_sleep_data(date_str) or {}
-    hrv       = client.get_hrv_data(date_str) or {}
-    readiness = client.get_training_readiness(date_str) or {}
-    bb        = client.get_body_battery(date_str, date_str) or []
-
-    sleep_summary = safe(sleep, "dailySleepDTO") or {}
-    sleep_score   = safe(sleep_summary, "sleepScores", "overall", "value")
-    sleep_dur     = safe(sleep_summary, "sleepTimeSeconds")
-    deep_pct = rem_pct = None
-    if sleep_dur and sleep_dur > 0:
-        deep_pct = round((safe(sleep_summary, "deepSleepSeconds") or 0) / sleep_dur * 100, 1)
-        rem_pct  = round((safe(sleep_summary, "remSleepSeconds") or 0) / sleep_dur * 100, 1)
-    sleep_dur_h = round(float(sleep_dur) / 3600, 2) if sleep_dur else None
-
-    hrv_summary = safe(hrv, "hrvSummary") or {}
-    hrv_status  = {"BALANCED": "Balanced", "UNBALANCED": "Unbalanced", "POOR": "Poor"}.get(
-        (safe(hrv_summary, "status") or "").upper(), None)
-
-    bb_vals = [v.get("charged") for d in bb for v in (d.get("bodyBatteryValuesDescriptors") or []) if v.get("charged") is not None]
-
-    props = {
-        "Date":               tp(date_str),
-        "Resting HR":         np(safe(stats, "restingHeartRate")),
-        "HRV Last Night":     np(safe(hrv_summary, "lastNight")),
-        "HRV 5-Day Avg":      np(safe(hrv_summary, "lastNight5MinHigh")),
-        "HRV Status":         sp(hrv_status),
-        "Body Battery Low":   np(min(bb_vals) if bb_vals else None),
-        "Body Battery High":  np(max(bb_vals) if bb_vals else None),
-        "Training Readiness": np(safe(readiness, "score")),
-        "Sleep Score":        np(sleep_score),
-        "Sleep Duration":     np(sleep_dur_h),
-        "Deep Sleep %":       np(deep_pct),
-        "REM Sleep %":        np(rem_pct),
-        "VO2 Max":            np(safe(stats, "maxMetValue")),
-        "Training Load":      np(safe(stats, "acuteTrainingLoad") or safe(stats, "trainingLoadBalance", "acuteLoad")),
-        "Steps":              np(safe(stats, "totalSteps")),
-        "Active Calories":    np(safe(stats, "activeKilocalories")),
-    }
-    upsert(DB_GARMIN, "Date", date_str, props)
-
-TYPE_MAP = {
-    "running": "Run", "trail_running": "Run", "treadmill_running": "Run",
-    "cycling": "Cycle", "strength_training": "Strength",
-    "hiit": "HIIT", "cardio": "HIIT"
-}
-
-def classify(type_key, name):
-    n = (name or "").lower()
-    if "hyrox" in n:    return "HYROX"
-    if "tempo" in n:    return "Tempo"
-    if "interval" in n: return "Intervals"
-    if "zone 2" in n or "easy" in n: return "Zone 2"
-    return TYPE_MAP.get((type_key or "").lower(), "Run")
-
-def walk_filter(laps):
-    run, walk_time = [], 0.0
-    for lap in laps:
-        dur   = float(lap.get("duration") or lap.get("elapsedDuration") or 0)
-        speed = float(lap.get("averageSpeed") or 0)
-        if speed <= 0 or 1000 / speed / 60 > WALK_THRESHOLD_MIN_KM:
-            walk_time += dur
-        else:
-            run.append({"dur": dur, "speed": speed,
-                        "hr": lap.get("averageHR") or lap.get("averageHeartRate"),
-                        "dist": float(lap.get("distance") or 0)})
-    if not run:
-        return round(walk_time / 60, 2), None, None
-    td = sum(l["dist"] for l in run)
-    tt = sum(l["dur"] for l in run)
-    hrs = [l["hr"] for l in run if l["hr"]]
-    return (round(walk_time / 60, 2),
-            ms_to_pace(td / tt) if tt else None,
-            round(sum(hrs) / len(hrs), 1) if hrs else None)
-
-def hr_zones(details):
-    zones = {}
-    hz = safe(details, "heartRateZones") or []
-    total = sum(float(z.get("secsInZone") or 0) for z in hz)
-    if total > 0:
-        for i, z in enumerate(hz[:5], 1):
-            zones[f"Zone {i} %"] = round(float(z.get("secsInZone") or 0) / total * 100, 1)
-    return zones
-
-def splits_json(laps):
-    return json.dumps([{
-        "km": i + 1,
-        "pace": ms_to_pace(float(l.get("averageSpeed") or 0)),
-        "hr": l.get("averageHR") or l.get("averageHeartRate"),
-        "cadence": l.get("averageRunCadence") or l.get("averageCadence"),
-        "gct_ms": l.get("averageGroundContactTime")
-    } for i, l in enumerate(laps)])
-
-def sync_activities(client, date_str):
-    print(f"\n-- Activities for {date_str} --")
-    activities = client.get_activities_by_date(date_str, date_str) or []
-    if not activities:
-        print("  No activities found.")
-        return
-
-    for act in activities:
-        act_id   = act.get("activityId")
-        act_name = act.get("activityName") or f"Activity {act_id}"
-        act_type = classify(safe(act, "activityType", "typeKey"), act_name)
-        print(f"  Processing: {act_name} [{act_type}]")
-
-        try:
-            details = client.get_activity(act_id) or {}
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"    Warning - Details: {e}"); details = {}
-
-        try:
-            laps = client.get_activity_splits(act_id) or []
-            if isinstance(laps, dict):
-                laps = laps.get("lapDTOs") or laps.get("laps") or []
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"    Warning - Splits: {e}"); laps = []
-
-        walk_min, run_pace, run_hr = walk_filter(laps) if laps else (None, None, None)
-        zones = hr_zones(details)
-        dyn   = safe(details, "summaryDTO") or {}
-
-        props = {
-            "Activity":                    tp(act_name),
-            "Date":                        txp(date_str),
-            "Activity Type":               sp(act_type),
-            "Total Distance km":           np(round(float(act.get("distance") or 0) / 1000, 3)),
-            "Moving Time min":             np(sec_to_min(act.get("movingDuration") or act.get("duration"))),
-            "Elapsed Time min":            np(sec_to_min(act.get("elapsedDuration") or act.get("duration"))),
-            "Avg Pace min/km":             np(ms_to_pace(float(act.get("averageSpeed") or 0))),
-            "Best Pace min/km":            np(ms_to_pace(float(act.get("maxSpeed") or 0))),
-            "Avg HR":                      np(act.get("averageHR")),
-            "Max HR":                      np(act.get("maxHR")),
-            "Avg Cadence spm":             np(act.get("averageRunningCadenceInStepsPerMinute")),
-            "Avg GCT ms":                  np(dyn.get("avgGroundContactTime")),
-            "Avg Vertical Oscillation cm": np(dyn.get("avgVerticalOscillation")),
-            "Avg Stride Length m":         np(dyn.get("avgStrideLength")),
-            "Avg Power W":                 np(dyn.get("avgPower")),
-            "Elevation Gain m":            np(act.get("elevationGain")),
-            "Splits JSON":                 txp(splits_json(laps) if laps else "[]"),
-            "Walk Time Excluded min":      np(walk_min),
-            "Run Only Avg Pace min/km":    np(run_pace),
-            "Run Only Avg HR":             np(run_hr),
-            "Training Effect Aerobic":     np(act.get("aerobicTrainingEffect")),
-            "Training Effect Anaerobic":   np(act.get("anaerobicTrainingEffect")),
-            "Garmin Activity ID":          txp(str(act_id)),
-        }
-        for z in range(1, 6):
-            props[f"Zone {z} %"] = np(zones.get(f"Zone {z} %"))
-
-        upsert(DB_RUNNING, "Activity", act_name, props)
-
-def main():
-    target_date = os.environ.get(
-        "SYNC_DATE",
-        (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
-    )
-    print(f"Garmin sync starting for {target_date}")
-    client = connect_garmin()
-    sync_daily(client, target_date)
-    sync_activities(client, target_date)
-    print("Garmin sync complete.")
-
-if __name__ == "__main__":
-    main()
+      - name: Notify on failure
+        if: failure()
+        run: echo "::error::Health sync failed for ${{ env.SYNC_DATE }}"
