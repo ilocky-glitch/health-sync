@@ -39,7 +39,13 @@ jobs:
           fi
           echo "Syncing date: $SYNC_DATE"
 
+      # Each sync runs independently (continue-on-error) so one failing source
+      # never blocks the others. The final "Summary & gate" step still fails the
+      # job if any source failed, so a broken source surfaces as a red run.
+
       - name: Run Garmin sync
+        id: garmin
+        continue-on-error: true
         env:
           GARMIN_OAUTH_TOKEN: ${{ secrets.GARMIN_OAUTH_TOKEN }}
           NOTION_TOKEN:       ${{ secrets.NOTION_TOKEN }}
@@ -49,6 +55,8 @@ jobs:
         run: python scripts/garmin_sync.py
 
       - name: Run Dexcom sync
+        id: dexcom
+        continue-on-error: true
         env:
           DEXCOM_USERNAME: ${{ secrets.DEXCOM_USERNAME }}
           DEXCOM_PASSWORD: ${{ secrets.DEXCOM_PASSWORD }}
@@ -59,6 +67,8 @@ jobs:
         run: python scripts/dexcom_sync.py
 
       - name: Run Strength sync
+        id: strength
+        continue-on-error: true
         env:
           NOTION_TOKEN:        ${{ secrets.NOTION_TOKEN }}
           NOTION_DB_STRENGTH:  ${{ secrets.NOTION_DB_STRENGTH }}
@@ -68,6 +78,28 @@ jobs:
           SYNC_DATE:           ${{ env.SYNC_DATE }}
         run: python scripts/strength_sync.py
 
-      - name: Notify on failure
-        if: failure()
-        run: echo "::error::Health sync failed for ${{ env.SYNC_DATE }}"
+      - name: Summary & gate
+        if: always()
+        run: |
+          G="${{ steps.garmin.outcome }}"
+          D="${{ steps.dexcom.outcome }}"
+          S="${{ steps.strength.outcome }}"
+          {
+            echo "## Health Sync — $SYNC_DATE"
+            echo ""
+            echo "| Source   | Result |"
+            echo "|----------|--------|"
+            echo "| Garmin   | $G |"
+            echo "| Dexcom   | $D |"
+            echo "| Strength | $S |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          fail=0
+          for o in "$G" "$D" "$S"; do
+            if [ "$o" != "success" ]; then fail=1; fi
+          done
+          if [ "$fail" = "1" ]; then
+            echo "::error::One or more syncs failed for $SYNC_DATE (Garmin=$G Dexcom=$D Strength=$S)"
+            exit 1
+          fi
+          echo "All syncs succeeded for $SYNC_DATE"
