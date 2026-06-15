@@ -1,17 +1,26 @@
 """
 garmin_sync.py
-Direct HTTP calls to Garmin Connect API using bearer token.
-No garminconnect library — bypasses all auth issues entirely.
+Pulls daily metrics + running activities from Garmin Connect and upserts
+into Notion databases.
+
+Auth: uses the pre-generated OAuth token stored in the GARMIN_OAUTH_TOKEN
+secret, loaded via `garth`. We talk to connectapi.garmin.com (pure OAuth2
+bearer auth) through garth.connectapi() — this is why it works where direct
+calls to connect.garmin.com return 401 (those need a JWT_FGP web cookie that
+the OAuth token alone does not provide).
 
 Env vars required:
-  GARMIN_OAUTH_TOKEN  (JSON token generated from Mac)
+  GARMIN_OAUTH_TOKEN  (JSON OAuth2 token generated locally)
   NOTION_TOKEN
   NOTION_DB_GARMIN
   NOTION_DB_RUNNING
 """
 
-import os, json, datetime, time
+import os, json, sys, datetime, time
 import requests
+import garth
+from garth.auth_tokens import OAuth1Token, OAuth2Token
+from garth.exc import GarthHTTPError
 
 NOTION_TOKEN       = os.environ["NOTION_TOKEN"]
 DB_GARMIN          = os.environ["NOTION_DB_GARMIN"]
@@ -25,37 +34,78 @@ NOTION_HEADERS = {
 }
 
 WALK_THRESHOLD_MIN_KM = 7.5
-BASE = "https://connect.garmin.com"
 
-# ── Garmin API ────────────────────────────────────────────────────────────────
-def get_access_token():
-    return json.loads(GARMIN_OAUTH_TOKEN)["access_token"]
+# ── Garmin auth (garth) ─────────────────────────────────────────────────────
+def connect_garmin():
+    """
+    Configure garth with the stored OAuth2 token so garth.connectapi() works.
 
-def garmin_headers(token):
-    return {
-        "Authorization": f"Bearer {token}",
-        "Di-Backend": "connectapi.garmin.com",
-        "X-app-ver": "4.70.2.0",
-        "NK": "NT",
-        "Content-Type": "application/json",
+    garth.connectapi() asserts an oauth1 token exists and will try to refresh
+    the oauth2 token (using oauth1) if it's expired. We inject a placeholder
+    oauth1 token; this is fine as long as the oauth2 token is still valid. If
+    the oauth2 token has expired, we fail loudly so it's obvious the token must
+    be regenerated locally (ProtonVPN, fresh IP) — refresh with a placeholder
+    oauth1 cannot succeed.
+    """
+    data = json.loads(GARMIN_OAUTH_TOKEN)
+    if "access_token" not in data:
+        raise RuntimeError(
+            "GARMIN_OAUTH_TOKEN does not contain an 'access_token' field. "
+            "Expected a JSON OAuth2 token dict."
+        )
+
+    # Fill any missing OAuth2Token fields with safe defaults.
+    defaults = {
+        "scope": "", "jti": "", "token_type": data.get("token_type", "Bearer"),
+        "access_token": "", "refresh_token": "",
+        "expires_in": 0, "expires_at": 0,
+        "refresh_token_expires_in": 0, "refresh_token_expires_at": 0,
     }
+    kwargs = {k: data.get(k, defaults[k]) for k in defaults}
+    oauth2 = OAuth2Token(**kwargs)
 
-def garmin_get(path, token, params=None):
-    url = f"{BASE}{path}"
-    r = requests.get(url, headers=garmin_headers(token), params=params, timeout=30)
-    if r.status_code == 200:
-        try:
-            return r.json()
-        except Exception:
-            return {}
-    print(f"  Warning: GET {path} → {r.status_code}: {r.text[:200]}")
-    return {}
+    if oauth2.expired:
+        raise RuntimeError(
+            "Garmin OAuth2 token has EXPIRED. Regenerate it locally using a "
+            "fresh IP (ProtonVPN) and update the GARMIN_OAUTH_TOKEN secret. "
+            "Do NOT add login() calls — they fail in CI."
+        )
 
-def get_display_name(token):
-    data = garmin_get("/userprofile-service/socialProfile", token)
-    return data.get("displayName") or data.get("userName") or "user"
+    placeholder_oauth1 = OAuth1Token(
+        oauth_token="placeholder",
+        oauth_token_secret="placeholder",
+        domain="garmin.com",
+    )
+    garth.client.configure(
+        oauth1_token=placeholder_oauth1,
+        oauth2_token=oauth2,
+        domain="garmin.com",
+    )
+    print("  Garmin OAuth2 token loaded and configured")
 
-# ── Notion helpers ────────────────────────────────────────────────────────────
+
+def garmin_get(path, params=None, critical=False):
+    """GET via garth.connectapi. Returns {} on non-critical failure.
+    Raises on failure if critical=True (so we don't write empty rows)."""
+    try:
+        result = garth.connectapi(path, params=params)
+        return result if result is not None else {}
+    except GarthHTTPError as e:
+        msg = f"  Warning: GET {path} failed: {e}"
+        if critical:
+            raise RuntimeError(f"Garmin API call failed (critical): {path} -> {e}")
+        print(msg)
+        return {}
+
+
+def get_display_name():
+    data = garmin_get("/userprofile-service/socialProfile", critical=True)
+    name = data.get("displayName") or data.get("userName")
+    if not name:
+        raise RuntimeError("Could not resolve Garmin display name from profile.")
+    return name
+
+# ── Notion helpers ──────────────────────────────────────────────────────────
 def notion_query(db_id, filter_payload):
     url = f"https://api.notion.com/v1/databases/{db_id}/query"
     r = requests.post(url, headers=NOTION_HEADERS, json={"filter": filter_payload})
@@ -101,24 +151,24 @@ def ms_to_pace(ms):
 def sec_to_min(s):
     return round(float(s) / 60, 2) if s is not None else None
 
-# ── Daily metrics ─────────────────────────────────────────────────────────────
-def sync_daily(token, display_name, date_str):
+# ── Daily metrics ───────────────────────────────────────────────────────────
+def sync_daily(display_name, date_str):
     print(f"\n-- Daily metrics for {date_str} --")
 
     stats = garmin_get(
         f"/usersummary-service/usersummary/daily/{display_name}",
-        token, {"calendarDate": date_str}
+        {"calendarDate": date_str}
     )
     sleep = garmin_get(
         f"/wellness-service/wellness/dailySleepData/{display_name}",
-        token, {"date": date_str, "nonSleepBufferMinutes": 60}
+        {"date": date_str, "nonSleepBufferMinutes": 60}
     )
-    hrv = garmin_get(f"/hrv-service/hrv/{date_str}", token)
+    hrv = garmin_get(f"/hrv-service/hrv/{date_str}")
     readiness = garmin_get(
-        f"/metrics-service/metrics/trainingreadiness/{date_str}", token)
+        f"/metrics-service/metrics/trainingreadiness/{date_str}")
     bb_data = garmin_get(
         "/wellness-service/wellness/bodyBattery/reports/daily",
-        token, {"startDate": date_str, "endDate": date_str}
+        {"startDate": date_str, "endDate": date_str}
     )
 
     # Sleep
@@ -151,6 +201,16 @@ def sync_daily(token, display_name, date_str):
     elif isinstance(readiness, dict):
         readiness_score = readiness.get("score")
 
+    # Guard against writing an all-empty row (e.g. transient API hiccup).
+    has_data = any(v is not None for v in [
+        safe(stats, "totalSteps"), safe(stats, "restingHeartRate"),
+        sleep_score, safe(hrv_summary, "lastNight"), readiness_score,
+        (min(bb_vals) if bb_vals else None),
+    ])
+    if not has_data:
+        print("  No daily metrics returned for this date — skipping daily upsert.")
+        return
+
     props = {
         "Date":               tp(date_str),
         "Resting HR":         np(safe(stats, "restingHeartRate")),
@@ -172,7 +232,7 @@ def sync_daily(token, display_name, date_str):
     upsert(DB_GARMIN, "Date", date_str, props)
     print(f"  Steps: {safe(stats,'totalSteps')} | RHR: {safe(stats,'restingHeartRate')} | Sleep: {sleep_score}")
 
-# ── Activities ────────────────────────────────────────────────────────────────
+# ── Activities ──────────────────────────────────────────────────────────────
 TYPE_MAP = {
     "running": "Run", "trail_running": "Run", "treadmill_running": "Run",
     "cycling": "Cycle", "strength_training": "Strength",
@@ -225,12 +285,11 @@ def splits_json(laps):
         "gct_ms": l.get("averageGroundContactTime")
     } for i, l in enumerate(laps)])
 
-def sync_activities(token, date_str):
+def sync_activities(date_str):
     print(f"\n-- Activities for {date_str} --")
 
     activities = garmin_get(
         "/activitylist-service/activities/search/activities",
-        token,
         {"startDate": date_str, "endDate": date_str, "start": 0, "limit": 10}
     )
 
@@ -245,10 +304,10 @@ def sync_activities(token, date_str):
         act_type = classify(type_key, act_name)
         print(f"  Processing: {act_name} [{act_type}]")
 
-        details  = garmin_get(f"/activity-service/activity/{act_id}", token)
+        details  = garmin_get(f"/activity-service/activity/{act_id}")
         time.sleep(0.3)
 
-        laps_raw = garmin_get(f"/activity-service/activity/{act_id}/splits", token)
+        laps_raw = garmin_get(f"/activity-service/activity/{act_id}/splits")
         laps = []
         if isinstance(laps_raw, dict):
             laps = laps_raw.get("lapDTOs") or laps_raw.get("laps") or []
@@ -288,7 +347,7 @@ def sync_activities(token, date_str):
 
         upsert(DB_RUNNING, "Activity", act_name, props)
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# ── Entry point ─────────────────────────────────────────────────────────────
 def main():
     target_date = os.environ.get(
         "SYNC_DATE",
@@ -296,15 +355,18 @@ def main():
     )
     print(f"Garmin sync starting for {target_date}")
 
-    token = get_access_token()
-    print(f"  Token loaded OK")
+    connect_garmin()
 
-    display_name = get_display_name(token)
+    display_name = get_display_name()
     print(f"  Display name: {display_name}")
 
-    sync_daily(token, display_name, target_date)
-    sync_activities(token, target_date)
+    sync_daily(display_name, target_date)
+    sync_activities(target_date)
     print("\nGarmin sync complete.")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"ERROR: Garmin sync failed: {e}", file=sys.stderr)
+        sys.exit(1)

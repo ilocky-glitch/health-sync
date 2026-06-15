@@ -1,24 +1,35 @@
 """
 dexcom_sync.py
-Pulls CGM data from Dexcom Share (via pydexcom) and computes
-daily metrics, then upserts into Notion.
+Pulls CGM data from Dexcom Share (via pydexcom) and computes daily metrics,
+then upserts into Notion.
+
+Auth notes:
+  * pydexcom uses the Dexcom *Share* service. The Dexcom account MUST have
+    "Share" enabled with at least one follower in the Dexcom mobile app, or
+    authentication returns "Failed to authenticate" regardless of credentials.
+  * Dexcom routes accounts to a regional server based on where the account was
+    created, not where you currently live. We try the configured region first,
+    then fall back to the other regional servers automatically.
+  * Dexcom Share only retains roughly the last 24 hours of readings, so syncing
+    a date more than ~1 day in the past will return few or no readings.
 
 Env vars required:
   DEXCOM_USERNAME, DEXCOM_PASSWORD
-  DEXCOM_REGION  (us | ous | jp)
+  DEXCOM_REGION  (us | ous | jp)   -- preferred region, tried first
   NOTION_TOKEN
   NOTION_DB_CGM
 """
 
-import os, json, datetime, statistics
+import os, sys, datetime, statistics
 from pydexcom import Dexcom
+from pydexcom.errors import AccountError, SessionError, ArgumentError
 import requests
 
 NOTION_TOKEN  = os.environ["NOTION_TOKEN"]
 DB_CGM        = os.environ["NOTION_DB_CGM"]
 DEXCOM_USER   = os.environ["DEXCOM_USERNAME"]
 DEXCOM_PASS   = os.environ["DEXCOM_PASSWORD"]
-DEXCOM_REGION = os.environ.get("DEXCOM_REGION", "ous")
+DEXCOM_REGION = os.environ.get("DEXCOM_REGION", "ous").lower()
 
 NOTION_HEADERS = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
@@ -64,23 +75,34 @@ def np(v):  return {"number": round(float(v), 2) if v is not None else None}
 def sp(v):  return {"select": {"name": v} if v else None}
 
 def connect_dexcom():
-    """Try new pydexcom API first, fall back to legacy if needed."""
-    try:
-        client = Dexcom(username=DEXCOM_USER, password=DEXCOM_PASS,
-                        region=DEXCOM_REGION)
-        print("  Connected to Dexcom (new API)")
-        return client
-    except TypeError:
-        pass
-    try:
-        client = Dexcom(DEXCOM_USER, DEXCOM_PASS,
-                        ous=(DEXCOM_REGION == "ous"))
-        print("  Connected to Dexcom (legacy API)")
-        return client
-    except Exception as e:
-        raise RuntimeError(f"Dexcom connection failed: {e}")
+    """
+    Connect to Dexcom Share, trying the preferred region first and then the
+    other regional servers as a fallback (accounts are tied to the server
+    where they were created).
+    """
+    regions = [DEXCOM_REGION] + [r for r in ("ous", "us", "jp") if r != DEXCOM_REGION]
+    last_err = None
+    for region in regions:
+        try:
+            client = Dexcom(username=DEXCOM_USER, password=DEXCOM_PASS, region=region)
+            print(f"  Connected to Dexcom (region={region})")
+            return client
+        except (AccountError, SessionError, ArgumentError) as e:
+            print(f"  Region '{region}' failed: {e}")
+            last_err = e
+        except Exception as e:  # network / unexpected
+            print(f"  Region '{region}' errored: {e}")
+            last_err = e
+    raise RuntimeError(
+        "Dexcom authentication failed on all regions "
+        f"({', '.join(regions)}). Last error: {last_err}\n"
+        "Checklist: (1) Dexcom *Share* is enabled with at least one follower "
+        "in the Dexcom app; (2) DEXCOM_USERNAME / DEXCOM_PASSWORD are correct; "
+        "(3) the account's home region is one of us/ous/jp."
+    )
 
 def fetch_day_readings(client, target_dt):
+    # Dexcom Share retains ~24h of data (max 1440 minutes / 288 readings).
     readings_raw = client.get_glucose_readings(minutes=1440, max_count=288)
     day = []
     for r in readings_raw:
@@ -129,14 +151,14 @@ def main():
     )
     target_date = datetime.date.fromisoformat(target_str)
     print(f"Dexcom sync starting for {target_str}")
-    print(f"  Region: {DEXCOM_REGION}")
+    print(f"  Preferred region: {DEXCOM_REGION}")
 
     client   = connect_dexcom()
     readings = fetch_day_readings(client, target_date)
     print(f"  Readings found: {len(readings)}")
 
     if not readings:
-        print("  No readings for this date, skipping.")
+        print("  No readings for this date (Dexcom Share only keeps ~24h). Skipping.")
         return
 
     metrics = compute_metrics(readings)
@@ -163,4 +185,8 @@ def main():
     print("\nDexcom sync complete.")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"ERROR: Dexcom sync failed: {e}", file=sys.stderr)
+        sys.exit(1)
