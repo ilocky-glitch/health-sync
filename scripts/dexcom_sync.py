@@ -8,8 +8,9 @@ Auth notes:
     "Share" enabled with at least one follower in the Dexcom mobile app, or
     authentication returns "Failed to authenticate" regardless of credentials.
   * Dexcom routes accounts to a regional server based on where the account was
-    created, not where you currently live. We try the configured region first,
-    then fall back to the other regional servers automatically.
+    created, not where you currently live. This account authenticates on the
+    'jp' server, so that is the default; we still fall back to the other
+    regional servers automatically if the preferred one fails.
   * Dexcom Share only retains roughly the last 24 hours of readings, so syncing
     a date more than ~1 day in the past will return few or no readings.
 
@@ -29,7 +30,7 @@ NOTION_TOKEN  = os.environ["NOTION_TOKEN"]
 DB_CGM        = os.environ["NOTION_DB_CGM"]
 DEXCOM_USER   = os.environ["DEXCOM_USERNAME"]
 DEXCOM_PASS   = os.environ["DEXCOM_PASSWORD"]
-DEXCOM_REGION = os.environ.get("DEXCOM_REGION", "ous").lower()
+DEXCOM_REGION = os.environ.get("DEXCOM_REGION", "jp").lower()
 
 NOTION_HEADERS = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
@@ -41,9 +42,6 @@ RANGE_LOW  = 3.9
 RANGE_HIGH = 10.0
 OVERNIGHT_START_HOUR = 0
 OVERNIGHT_END_HOUR   = 6
-
-def mg_to_mmol(mg):
-    return round(mg / 18.018, 2)
 
 def notion_query(db_id, filter_payload):
     url = f"https://api.notion.com/v1/databases/{db_id}/query"
@@ -80,7 +78,7 @@ def connect_dexcom():
     other regional servers as a fallback (accounts are tied to the server
     where they were created).
     """
-    regions = [DEXCOM_REGION] + [r for r in ("ous", "us", "jp") if r != DEXCOM_REGION]
+    regions = [DEXCOM_REGION] + [r for r in ("jp", "ous", "us") if r != DEXCOM_REGION]
     last_err = None
     for region in regions:
         try:
@@ -106,8 +104,9 @@ def fetch_day_readings(client, target_dt):
     readings_raw = client.get_glucose_readings(minutes=1440, max_count=288)
     day = []
     for r in readings_raw:
-        if r.time.date() == target_dt and r.value:
-            day.append({"time": r.time, "mmol": mg_to_mmol(r.value)})
+        # pydexcom GlucoseReading exposes .datetime and .mmol_l (newer API).
+        if r.datetime.date() == target_dt and r.mmol_l is not None:
+            day.append({"time": r.datetime, "mmol": r.mmol_l})
     return sorted(day, key=lambda x: x["time"])
 
 def _count_events(readings, condition):
