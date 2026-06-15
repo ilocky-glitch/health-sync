@@ -60,7 +60,7 @@ jobs:
         env:
           DEXCOM_USERNAME: ${{ secrets.DEXCOM_USERNAME }}
           DEXCOM_PASSWORD: ${{ secrets.DEXCOM_PASSWORD }}
-          DEXCOM_REGION:   ous
+          DEXCOM_REGION:   jp
           NOTION_TOKEN:    ${{ secrets.NOTION_TOKEN }}
           NOTION_DB_CGM:   ${{ secrets.NOTION_DB_CGM }}
           SYNC_DATE:       ${{ env.SYNC_DATE }}
