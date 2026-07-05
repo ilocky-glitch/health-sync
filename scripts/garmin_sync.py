@@ -38,37 +38,52 @@ WALK_THRESHOLD_MIN_KM = 7.5
 # ── Garmin auth (garth) ─────────────────────────────────────────────────────
 def connect_garmin():
     """
-    Configure garth with the stored OAuth2 token so garth.connectapi() works.
+    Configure garth from the stored GARMIN_OAUTH_TOKEN secret.
 
-    garth.connectapi() asserts an oauth1 token exists and will try to refresh
-    the oauth2 token (using oauth1) if it's expired. We inject a placeholder
-    oauth1 token; this is fine as long as the oauth2 token is still valid. If
-    the oauth2 token has expired, we fail loudly so it's obvious the token must
-    be regenerated locally (ProtonVPN, fresh IP) — refresh with a placeholder
-    oauth1 cannot succeed.
+    Preferred (new) format: a full garth session string produced by
+    garth.client.dumps() in refresh_garmin_token.py. It contains BOTH the
+    long-lived OAuth1 token (~1 year) and the OAuth2 token, so garth can refresh
+    the OAuth2 token by itself for ~a year — no more frequent manual regen.
+
+    Legacy fallback: an OAuth2-only JSON dict (the old secret format). This still
+    works while that OAuth2 token is valid, but cannot self-refresh (no real
+    OAuth1), so re-run refresh_garmin_token.py to upgrade to the full session.
     """
-    data = json.loads(GARMIN_OAUTH_TOKEN)
-    if "access_token" not in data:
-        raise RuntimeError(
-            "GARMIN_OAUTH_TOKEN does not contain an 'access_token' field. "
-            "Expected a JSON OAuth2 token dict."
-        )
+    raw = GARMIN_OAUTH_TOKEN.strip()
 
-    # Fill any missing OAuth2Token fields with safe defaults.
+    # Detect format: legacy is a JSON object with an 'access_token' field.
+    legacy = None
+    if raw.startswith("{"):
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict) and "access_token" in data:
+                legacy = data
+        except json.JSONDecodeError:
+            legacy = None
+
+    if legacy is None:
+        # New full-session string (oauth1 + oauth2). garth auto-refreshes oauth2.
+        garth.client.loads(raw)
+        if garth.client.oauth2_token is None:
+            raise RuntimeError("GARMIN_OAUTH_TOKEN did not load a valid garth session.")
+        print("  Garmin full session loaded (auto-refresh enabled)")
+        return
+
+    # ── Legacy OAuth2-only path (kept for backward compatibility) ──
     defaults = {
-        "scope": "", "jti": "", "token_type": data.get("token_type", "Bearer"),
+        "scope": "", "jti": "", "token_type": legacy.get("token_type", "Bearer"),
         "access_token": "", "refresh_token": "",
         "expires_in": 0, "expires_at": 0,
         "refresh_token_expires_in": 0, "refresh_token_expires_at": 0,
     }
-    kwargs = {k: data.get(k, defaults[k]) for k in defaults}
+    kwargs = {k: legacy.get(k, defaults[k]) for k in defaults}
     oauth2 = OAuth2Token(**kwargs)
 
     if oauth2.expired:
         raise RuntimeError(
-            "Garmin OAuth2 token has EXPIRED. Regenerate it locally using a "
-            "fresh IP (ProtonVPN) and update the GARMIN_OAUTH_TOKEN secret. "
-            "Do NOT add login() calls — they fail in CI."
+            "Garmin OAuth2 token has EXPIRED (legacy token format). Re-run "
+            "refresh_garmin_token.py locally and update the GARMIN_OAUTH_TOKEN "
+            "secret — the new full-session format lasts ~a year."
         )
 
     placeholder_oauth1 = OAuth1Token(
@@ -81,7 +96,7 @@ def connect_garmin():
         oauth2_token=oauth2,
         domain="garmin.com",
     )
-    print("  Garmin OAuth2 token loaded and configured")
+    print("  Garmin OAuth2 token loaded (legacy format — re-auth to enable auto-refresh)")
 
 
 def garmin_get(path, params=None, critical=False):
